@@ -1,0 +1,19 @@
+plugins {
+    id 'java'
+}
+
+description = 'Compile-time processor for the graph annotations'
+
+dependencies {
+    implementation project(':graph-annotations')
+
+    // Tests compile annotated graphs in memory and check the generated code against LangGraph4j
+    testImplementation 'org.bsc.langgraph4j:langgraph4j-core:1.9.5'
+    testImplementation platform('org.junit:junit-bom:6.1.3')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+}

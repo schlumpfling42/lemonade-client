@@ -1,0 +1,902 @@
+/*
+ * Material 3 style theme (light). Colors are Material "roles", defined once on .root as
+ * looked-up colors and used everywhere below; change a role here to retheme the app.
+ * JavaFX has no ripples or state layers, so hover/pressed use slightly darker container colors.
+ */
+.root {
+    -md-primary: #0b57d0;
+    -md-on-primary: #ffffff;
+    -md-primary-container: #d3e3fd;
+    -md-on-primary-container: #041e49;
+    -md-secondary-container: #c2e7ff;
+    -md-on-secondary-container: #001d35;
+    -md-surface: #f8fafd;
+    -md-surface-container-lowest: #ffffff;
+    -md-surface-container-low: #f0f4f9;
+    -md-surface-container: #e9eef6;
+    -md-surface-container-high: #dde3ea;
+    -md-on-surface: #1f1f1f;
+    -md-on-surface-variant: #444746;
+    -md-outline: #747775;
+    -md-outline-variant: #c4c7c5;
+    -md-error: #b3261e;
+    -md-error-container: #f9dedc;
+    -md-on-error-container: #410e0b;
+    -md-success: #146c2e;
+    -md-inverse-surface: #303030;
+    -md-inverse-on-surface: #f2f2f2;
+
+    -fx-font-family: "System";
+    -fx-font-size: 14px;
+    -fx-background-color: -md-surface;
+    -fx-text-fill: -md-on-surface;
+    -fx-accent: -md-primary;
+    -fx-focus-color: -md-primary;
+    -fx-faint-focus-color: transparent;
+}
+
+.label {
+    -fx-text-fill: -md-on-surface;
+}
+
+/* ---------- Top app bar ---------- */
+
+.header {
+    -fx-padding: 10 16 10 8;
+    -fx-background-color: -md-surface;
+}
+
+.title {
+    -fx-font-size: 20px;
+    -fx-text-fill: -md-on-surface;
+}
+
+.status {
+    -fx-text-fill: -md-on-surface-variant;
+    -fx-font-size: 12px;
+}
+
+/* Icon buttons (menu, close) */
+.button.sidebar-toggle, .tool-panel .button.panel-close {
+    -fx-background-color: transparent;
+    -fx-background-radius: 20;
+    -fx-min-width: 40;
+    -fx-min-height: 40;
+    -fx-pref-width: 40;
+    -fx-pref-height: 40;
+    -fx-padding: 0;
+    -fx-font-size: 18px;
+    -fx-text-fill: -md-on-surface-variant;
+    -fx-cursor: hand;
+}
+
+.button.sidebar-toggle:hover, .tool-panel .button.panel-close:hover {
+    -fx-background-color: -md-surface-container;
+}
+
+/* ---------- Buttons ---------- */
+
+/* Default: tonal button (also used by dialogs) */
+.button {
+    -fx-background-color: -md-secondary-container;
+    -fx-text-fill: -md-on-secondary-container;
+    -fx-background-radius: 20;
+    -fx-background-insets: 0;
+    -fx-border-width: 0;
+    -fx-padding: 9 22 9 22;
+    -fx-font-size: 14px;
+    -fx-cursor: hand;
+}
+
+.button:hover {
+    -fx-background-color: derive(-md-secondary-container, -6%);
+    -fx-effect: dropshadow(gaussian, rgba(0, 0, 0, 0.14), 4, 0, 0, 1);
+}
+
+.button:pressed {
+    -fx-background-color: derive(-md-secondary-container, -12%);
+}
+
+.button:focused {
+    -fx-border-color: -md-primary;
+    -fx-border-width: 2;
+    -fx-border-radius: 20;
+    -fx-border-insets: -3;
+}
+
+.button:disabled {
+    -fx-opacity: 0.38;
+}
+
+/* Filled button */
+.button.primary, .button:default {
+    -fx-background-color: -md-primary;
+    -fx-text-fill: -md-on-primary;
+    -fx-font-weight: bold;
+}
+
+.button.primary:hover, .button:default:hover {
+    -fx-background-color: derive(-md-primary, 10%);
+}
+
+/* Text button (header actions) */
+.button.header-button {
+    -fx-background-color: transparent;
+    -fx-text-fill: -md-primary;
+    -fx-padding: 9 14 9 14;
+}
+
+.button.header-button:hover {
+    -fx-background-color: -md-surface-container;
+    -fx-effect: null;
+}
+
+/* Extended FAB */
+.button.new-chat {
+    -fx-background-color: -md-primary-container;
+    -fx-text-fill: -md-on-primary-container;
+    -fx-background-radius: 16;
+    -fx-border-radius: 16;
+    -fx-padding: 16 20 16 20;
+    -fx-alignment: center-left;
+    -fx-font-weight: bold;
+    -fx-effect: dropshadow(gaussian, rgba(0, 0, 0, 0.18), 10, 0, 0, 2);
+}
+
+.button.new-chat:hover {
+    -fx-background-color: derive(-md-primary-container, -6%);
+    -fx-effect: dropshadow(gaussian, rgba(0, 0, 0, 0.20), 16, 0, 0, 4);
+}
+
+/* Chips under the input (folder, conversation settings) */
+.button.folder-button {
+    -fx-background-color: -md-surface-container-lowest;
+    -fx-border-color: -md-outline-variant;
+    -fx-border-width: 1;
+    -fx-border-radius: 8;
+    -fx-border-insets: 0;
+    -fx-background-radius: 8;
+    -fx-padding: 4 12 4 12;
+    -fx-font-size: 12px;
+    -fx-text-fill: -md-on-surface-variant;
+}
+
+.button.folder-button:hover {
+    -fx-background-color: -md-surface-container-low;
+    -fx-effect: null;
+}
+
+/* ---------- Navigation drawer (conversations) ---------- */
+
+.sidebar {
+    -fx-background-color: -md-surface-container-low;
+    -fx-background-radius: 0 16 0 0;
+    -fx-padding: 16 12 12 12;
+}
+
+.sidebar-heading {
+    -fx-font-size: 12px;
+    -fx-font-weight: bold;
+    -fx-text-fill: -md-on-surface-variant;
+    -fx-padding: 14 0 2 16;
+}
+
+.conversation-list, .conversation-list > .virtual-flow > .clipped-container > .sheet {
+    -fx-background-color: transparent;
+    -fx-background-insets: 0;
+    -fx-padding: 0;
+}
+
+.conversation-list .list-cell {
+    -fx-background-color: transparent;
+    -fx-padding: 10 16 10 16;
+    -fx-background-radius: 28;
+    -fx-background-insets: 1 0 1 0;
+}
+
+.conversation-list .list-cell:hover {
+    -fx-background-color: -md-surface-container;
+}
+
+.conversation-list .list-cell:selected {
+    -fx-background-color: -md-secondary-container;
+}
+
+.conversation-list .list-cell:selected .conversation-title {
+    -fx-text-fill: -md-on-secondary-container;
+    -fx-font-weight: bold;
+}
+
+.conversation-title {
+    -fx-text-fill: -md-on-surface;
+}
+
+.conversation-when {
+    -fx-font-size: 11px;
+    -fx-text-fill: -md-on-surface-variant;
+}
+
+/* ---------- Transcript ---------- */
+
+.split-pane {
+    -fx-background-color: -md-surface;
+    -fx-background-insets: 0;
+    -fx-padding: 0;
+}
+
+.split-pane > .split-pane-divider {
+    -fx-background-color: -md-outline-variant;
+    -fx-padding: 0 0.5 0 0.5;
+}
+
+.transcript, .transcript > .viewport {
+    -fx-background-color: -md-surface;
+    -fx-background-insets: 0;
+    -fx-padding: 0;
+}
+
+.bubble {
+    -fx-padding: 12 16 12 16;
+}
+
+.bubble .author {
+    -fx-font-size: 12px;
+    -fx-font-weight: bold;
+    -fx-text-fill: -md-on-surface-variant;
+}
+
+.bubble .body {
+    -fx-text-fill: -md-on-surface;
+    -fx-font-size: 15px;
+    -fx-line-spacing: 2;
+}
+
+.bubble.user {
+    -fx-background-color: -md-primary;
+    -fx-background-radius: 20 20 4 20;
+    -fx-effect: dropshadow(gaussian, rgba(0, 0, 0, 0.14), 4, 0, 0, 1);
+}
+
+.bubble.user .author, .bubble.user .body {
+    -fx-text-fill: -md-on-primary;
+}
+
+.bubble.user .author {
+    -fx-opacity: 0.8;
+}
+
+.bubble.assistant {
+    -fx-background-color: -md-surface-container-lowest;
+    -fx-background-radius: 20 20 20 4;
+    -fx-effect: dropshadow(gaussian, rgba(0, 0, 0, 0.14), 4, 0, 0, 1);
+}
+
+.bubble.tool {
+    -fx-background-color: -md-surface-container;
+    -fx-background-radius: 12;
+}
+
+.bubble.tool .body {
+    -fx-font-family: "Monospaced";
+    -fx-font-size: 12px;
+    -fx-text-fill: -md-on-surface-variant;
+}
+
+.bubble.error {
+    -fx-background-color: -md-error-container;
+    -fx-background-radius: 12;
+}
+
+.bubble.error .author, .bubble.error .body {
+    -fx-text-fill: -md-on-error-container;
+}
+
+/* Attached-file chips inside your (blue) message bubble */
+.bubble.user .button.attachment-chip {
+    -fx-background-color: rgba(255, 255, 255, 0.18);
+    -fx-text-fill: white;
+    -fx-background-radius: 8;
+    -fx-padding: 4 10 4 10;
+    -fx-font-size: 12px;
+}
+
+.bubble.user .button.attachment-chip:hover {
+    -fx-background-color: rgba(255, 255, 255, 0.30);
+    -fx-effect: null;
+}
+
+/* ---------- Selectable message text (RichTextArea in every bubble) ---------- */
+
+.bubble .rich-text-area,
+.bubble .rich-text-area .content,
+.bubble .rich-text-area .scroll-pane,
+.bubble .rich-text-area .viewport {
+    -fx-background-color: transparent;
+    -fx-background-insets: 0;
+    -fx-border-width: 0;
+    -fx-padding: 0;
+}
+
+.bubble .rich-text-area .scroll-bar {
+    -fx-opacity: 0; /* the text is as tall as its content; scrolling happens in the transcript */
+}
+
+/* ---------- Markdown in assistant messages (MarkdownView) ---------- */
+
+.md-text {
+    -fx-font-family: "System";
+    -fx-font-size: 15px;
+    -fx-fill: -md-on-surface;
+}
+
+.md-bold {
+    -fx-font-weight: bold;
+}
+
+.md-italic {
+    -fx-font-style: italic;
+}
+
+.md-bold-italic {
+    -fx-font-weight: bold;
+    -fx-font-style: italic;
+}
+
+.md-paragraph {
+    -fx-line-spacing: 3;
+}
+
+.md-h1 .md-text {
+    -fx-font-size: 22px;
+    -fx-font-weight: bold;
+}
+
+.md-h2 .md-text {
+    -fx-font-size: 19px;
+    -fx-font-weight: bold;
+}
+
+.md-h3 .md-text {
+    -fx-font-size: 16px;
+    -fx-font-weight: bold;
+}
+
+.md-h1, .md-h2, .md-h3 {
+    -fx-padding: 6 0 0 0;
+}
+
+.md-list-marker {
+    -fx-font-size: 15px;
+    -fx-text-fill: -md-primary;
+    -fx-font-weight: bold;
+}
+
+.md-inline-code {
+    -fx-font-family: "Monospaced";
+    -fx-font-size: 13px;
+    -fx-text-fill: -md-on-secondary-container;
+    -fx-background-color: -md-surface-container;
+    -fx-background-radius: 4;
+    -fx-padding: 0 4 0 4;
+}
+
+/* Links are Text runs (they wrap with the paragraph), so they use -fx-fill, not -fx-text-fill */
+.md-text.md-link {
+    -fx-fill: -md-primary;
+    -fx-underline: true;
+}
+
+.md-text.md-link:hover {
+    -fx-fill: derive(-md-primary, -20%);
+}
+
+.md-code-block {
+    -fx-background-color: #1e1f22;
+    -fx-background-radius: 12;
+}
+
+.md-code-header {
+    -fx-padding: 6 8 2 14;
+}
+
+.md-code-lang {
+    -fx-font-size: 11px;
+    -fx-text-fill: #a8abb2;
+}
+
+.button.md-code-copy {
+    -fx-background-color: transparent;
+    -fx-text-fill: #c9ccd3;
+    -fx-font-size: 11px;
+    -fx-padding: 3 10 3 10;
+    -fx-border-width: 0;
+}
+
+.button.md-code-copy:hover {
+    -fx-background-color: #33353a;
+    -fx-effect: null;
+}
+
+.md-code-scroll, .md-code-scroll > .viewport {
+    -fx-background-color: transparent;
+    -fx-background-insets: 0;
+    -fx-padding: 0;
+}
+
+.md-code {
+    -fx-font-family: "Monospaced";
+    -fx-font-size: 13px;
+    -fx-text-fill: #e6e7ea;
+    -fx-padding: 4 14 12 14;
+}
+
+.md-quote {
+    -fx-border-color: transparent transparent transparent -md-primary;
+    -fx-border-width: 0 0 0 3;
+    -fx-padding: 2 0 2 12;
+}
+
+.md-quote .md-text {
+    -fx-fill: -md-on-surface-variant;
+}
+
+.md-table-scroll, .md-table-scroll > .viewport {
+    -fx-background-color: transparent;
+    -fx-background-insets: 0;
+    -fx-padding: 0;
+}
+
+.md-table {
+    -fx-border-color: -md-outline-variant;
+    -fx-border-radius: 8;
+    -fx-background-radius: 8;
+}
+
+.md-th, .md-td {
+    -fx-padding: 6 12 6 12;
+}
+
+.md-th {
+    -fx-background-color: -md-surface-container;
+}
+
+.md-th .md-text {
+    -fx-font-weight: bold;
+}
+
+.md-td.md-row-even {
+    -fx-background-color: -md-surface-container-low;
+}
+
+/* Tool calls: assist chips */
+.hyperlink.tool-link {
+    -fx-font-family: "Monospaced";
+    -fx-font-size: 12px;
+    -fx-text-fill: -md-on-surface-variant;
+    -fx-padding: 6 12 6 12;
+    -fx-background-color: -md-surface-container-lowest;
+    -fx-background-radius: 8;
+    -fx-border-color: -md-outline-variant;
+    -fx-border-width: 1;
+    -fx-border-radius: 8;
+    -fx-underline: false;
+    -fx-cursor: hand;
+}
+
+.hyperlink.tool-link:hover {
+    -fx-background-color: -md-surface-container-low;
+    -fx-text-fill: -md-primary;
+}
+
+.hyperlink.tool-link:visited {
+    -fx-text-fill: -md-on-surface-variant;
+}
+
+.hyperlink.tool-link:focused {
+    -fx-border-color: -md-primary;
+}
+
+/* The live progress chip of a running coding job: tonal, like a tool chip but highlighted */
+.progress-card {
+    -fx-font-family: "Monospaced";
+    -fx-font-size: 12px;
+    -fx-text-fill: -md-on-secondary-container;
+    -fx-padding: 6 12 6 12;
+    -fx-background-color: -md-secondary-container;
+    -fx-background-radius: 8;
+}
+
+.tool-state {
+    -fx-font-size: 11px;
+    -fx-font-weight: bold;
+    -fx-text-fill: -md-on-surface-variant;
+    -fx-padding: 2 8 2 8;
+    -fx-background-radius: 8;
+    -fx-background-color: -md-surface-container;
+}
+
+.tool-state.done {
+    -fx-text-fill: -md-success;
+    -fx-background-color: #c4eed0;
+}
+
+.tool-state.failed {
+    -fx-text-fill: -md-on-error-container;
+    -fx-background-color: -md-error-container;
+}
+
+/* ---------- Tool output side sheet ---------- */
+
+.tool-panel {
+    -fx-padding: 16 16 16 20;
+    -fx-background-color: -md-surface-container-low;
+}
+
+.tool-panel .panel-title {
+    -fx-font-size: 18px;
+    -fx-text-fill: -md-on-surface;
+}
+
+.tool-panel .panel-section {
+    -fx-font-size: 12px;
+    -fx-font-weight: bold;
+    -fx-text-fill: -md-on-surface-variant;
+    -fx-padding: 8 0 0 0;
+}
+
+.tool-panel .button.panel-copy {
+    -fx-background-color: transparent;
+    -fx-text-fill: -md-primary;
+    -fx-font-size: 12px;
+    -fx-padding: 2 10 2 10;
+}
+
+.tool-panel .button.panel-copy:hover {
+    -fx-background-color: -md-surface-container;
+    -fx-effect: null;
+}
+
+.tool-panel .text-area.failed {
+    -fx-border-color: -md-error;
+}
+
+.tool-panel .text-area.failed .content {
+    -fx-background-color: -md-error-container;
+}
+
+/* ---------- Composer and text fields (outlined) ---------- */
+
+.composer {
+    -fx-background-color: -md-surface-container-low;
+    -fx-background-radius: 24 24 0 0;
+    -fx-padding: 12 16 12 16;
+}
+
+.text-area, .text-field {
+    -fx-background-color: -md-surface-container-lowest;
+    -fx-background-radius: 12;
+    -fx-background-insets: 0;
+    -fx-border-color: -md-outline;
+    -fx-border-width: 1;
+    -fx-border-radius: 12;
+    -fx-text-fill: -md-on-surface;
+    -fx-prompt-text-fill: -md-on-surface-variant;
+    -fx-highlight-fill: -md-primary-container;
+    -fx-highlight-text-fill: -md-on-primary-container;
+}
+
+.text-field {
+    -fx-padding: 8 12 8 12;
+}
+
+.text-area {
+    -fx-padding: 4;
+}
+
+.text-area:focused, .text-field:focused {
+    -fx-border-color: -md-primary;
+    -fx-border-width: 2;
+}
+
+.text-area .content {
+    -fx-background-color: transparent;
+    -fx-background-radius: 12;
+    -fx-padding: 6 8 6 8;
+}
+
+.text-area .scroll-pane, .text-area .scroll-pane .viewport {
+    -fx-background-color: transparent;
+}
+
+.text-area.command {
+    -fx-font-family: "Monospaced";
+    -fx-font-size: 13px;
+}
+
+/* ---------- Scroll bars (thin, no arrows) ---------- */
+
+.scroll-bar {
+    -fx-background-color: transparent;
+    -fx-padding: 2;
+}
+
+.scroll-bar:vertical {
+    -fx-pref-width: 10;
+}
+
+.scroll-bar:horizontal {
+    -fx-pref-height: 10;
+}
+
+.scroll-bar .thumb {
+    -fx-background-color: -md-outline-variant;
+    -fx-background-radius: 4;
+    -fx-background-insets: 0;
+}
+
+.scroll-bar .thumb:hover, .scroll-bar .thumb:pressed {
+    -fx-background-color: -md-outline;
+}
+
+.scroll-bar .track, .scroll-bar .track-background {
+    -fx-background-color: transparent;
+    -fx-border-color: transparent;
+}
+
+.scroll-bar .increment-button, .scroll-bar .decrement-button {
+    -fx-padding: 0;
+    -fx-background-color: transparent;
+}
+
+.scroll-bar .increment-arrow, .scroll-bar .decrement-arrow {
+    -fx-shape: " ";
+    -fx-padding: 0;
+}
+
+.scroll-pane > .corner {
+    -fx-background-color: transparent;
+}
+
+/* ---------- Menus, tooltips, progress ---------- */
+
+.context-menu {
+    -fx-background-color: -md-surface-container-lowest;
+    -fx-background-radius: 12;
+    -fx-padding: 6;
+    -fx-effect: dropshadow(gaussian, rgba(0, 0, 0, 0.18), 12, 0, 0, 3);
+}
+
+.context-menu .menu-item {
+    -fx-padding: 9 24 9 14;
+    -fx-background-radius: 8;
+}
+
+.context-menu .menu-item:focused {
+    -fx-background-color: -md-surface-container;
+}
+
+.context-menu .menu-item .label {
+    -fx-text-fill: -md-on-surface;
+}
+
+.tooltip {
+    -fx-background-color: -md-inverse-surface;
+    -fx-text-fill: -md-inverse-on-surface;
+    -fx-background-radius: 4;
+    -fx-font-size: 12px;
+    -fx-padding: 6 8 6 8;
+}
+
+.progress-indicator {
+    -fx-progress-color: -md-primary;
+}
+
+/* ---------- Dialogs (approval, settings, rename) ---------- */
+
+.dialog-pane {
+    -fx-background-color: -md-surface-container-high;
+    -fx-padding: 8 12 4 12;
+}
+
+.dialog-pane > .header-panel {
+    -fx-background-color: transparent;
+    -fx-padding: 16 12 4 12;
+}
+
+.dialog-pane > .header-panel .label {
+    -fx-font-size: 22px;
+    -fx-text-fill: -md-on-surface;
+}
+
+.dialog-pane > .content {
+    -fx-padding: 8 12 8 12;
+}
+
+.dialog-pane > .button-bar > .container {
+    -fx-padding: 12 0 12 0;
+}
+
+.dialog-pane .button {
+    -fx-background-color: transparent;
+    -fx-text-fill: -md-primary;
+    -fx-font-weight: bold;
+}
+
+.dialog-pane .button:hover {
+    -fx-background-color: -md-surface-container;
+    -fx-effect: null;
+}
+
+.dialog-pane .button:default {
+    -fx-background-color: -md-primary;
+    -fx-text-fill: -md-on-primary;
+}
+
+.dialog-pane .button:default:hover {
+    -fx-background-color: derive(-md-primary, 10%);
+}
+
+.dialog-pane .button.browse {
+    -fx-background-color: -md-secondary-container;
+    -fx-text-fill: -md-on-secondary-container;
+}
+
+/* The approval dialog's Always split button: tonal, like the other buttons */
+.split-menu-button.always-button {
+    -fx-background-color: -md-secondary-container;
+    -fx-background-radius: 20;
+    -fx-background-insets: 0;
+    -fx-padding: 0;
+    -fx-border-width: 0;
+}
+
+.split-menu-button.always-button > .label {
+    -fx-text-fill: -md-on-secondary-container;
+    -fx-font-weight: bold;
+    -fx-padding: 9 10 9 22;
+    -fx-background-color: transparent;
+    -fx-min-width: -fx-pref-width;
+}
+
+/* The arrow is part of the same pill: same background, a thin divider, even padding */
+.split-menu-button.always-button > .arrow-button {
+    -fx-background-color: transparent;
+    -fx-padding: 9 18 9 12;
+    -fx-border-color: transparent transparent transparent rgba(0, 29, 53, 0.2);
+    -fx-border-width: 0 0 0 1;
+    -fx-border-insets: 8 0 8 0;
+}
+
+.split-menu-button.always-button > .arrow-button:hover,
+.split-menu-button.always-button > .arrow-button:pressed {
+    -fx-background-color: transparent;
+}
+
+.split-menu-button.always-button > .arrow-button > .arrow {
+    -fx-background-color: -md-on-secondary-container;
+    -fx-padding: 2.5 4.5 2.5 4.5;
+}
+
+.split-menu-button.always-button:hover {
+    -fx-background-color: derive(-md-secondary-container, -5%);
+}
+
+.split-menu-button.always-button:disabled {
+    -fx-opacity: 0.38;
+}
+
+/* Its menu items (the popup itself uses the .context-menu rules above) */
+.menu-item.always-item {
+    -fx-padding: 9 24 9 14;
+    -fx-background-radius: 8;
+    -fx-min-width: 150;
+}
+
+.menu-item.always-item:focused {
+    -fx-background-color: -md-secondary-container;
+}
+
+.menu-item.always-item .label {
+    -fx-font-size: 14px;
+    -fx-font-weight: bold;
+    -fx-text-fill: -md-on-surface;
+}
+
+.menu-item.always-item:focused .label {
+    -fx-text-fill: -md-on-secondary-container;
+}
+
+.menu-item.always-item > .left-container > .label {
+    -fx-text-fill: -md-primary; /* the ✓ */
+    -fx-min-width: 16;
+}
+
+.settings-caption {
+    -fx-font-size: 14px;
+    -fx-font-weight: bold;
+    -fx-text-fill: -md-on-surface;
+    -fx-padding: 10 0 0 0;
+}
+
+.settings-help {
+    -fx-font-size: 12px;
+    -fx-text-fill: -md-on-surface-variant;
+}
+
+.settings-help.settings-error {
+    -fx-text-fill: -md-error;
+}
+
+/* Thinking and coding-job notes: quiet, so the conversation's own answers stand out */
+.bubble.note {
+    -fx-background-color: -md-surface-container-low;
+    -fx-background-radius: 12;
+    -fx-border-color: -md-outline-variant;
+    -fx-border-radius: 12;
+    -fx-border-style: dashed;
+}
+
+.bubble.note .author {
+    -fx-font-style: italic;
+}
+
+.bubble.note .body {
+    -fx-font-size: 13px;
+    -fx-text-fill: -md-on-surface-variant;
+}
+
+/* The reply being generated right now: drawn as tokens arrive, replaced by the finished reply */
+.live-reply {
+    -fx-padding: 10 14 10 14;
+    -fx-background-color: -md-surface-container-lowest;
+    -fx-background-radius: 20 20 20 4;
+    -fx-border-color: -md-outline-variant;
+    -fx-border-radius: 20 20 20 4;
+}
+
+.live-thinking {
+    -fx-font-size: 13px;
+    -fx-font-style: italic;
+    -fx-text-fill: -md-on-surface-variant;
+}
+
+.live-text {
+    -fx-font-size: 15px;
+    -fx-text-fill: -md-on-surface;
+}
+
+.live-calls {
+    -fx-font-family: "Monospaced";
+    -fx-font-size: 12px;
+    -fx-text-fill: -md-on-surface-variant;
+}
+
+/* The calls of one tool pill, listed at the top of the side panel; the open one is highlighted */
+.tool-panel .call-scroll, .tool-panel .call-scroll > .viewport {
+    -fx-background-color: transparent;
+    -fx-background-insets: 0;
+    -fx-padding: 0;
+}
+
+.tool-panel .hyperlink.call-row {
+    -fx-font-family: "Monospaced";
+    -fx-font-size: 12px;
+    -fx-text-fill: -md-on-surface-variant;
+    -fx-padding: 4 8 4 8;
+    -fx-background-radius: 8;
+    -fx-underline: false;
+    -fx-border-color: transparent;
+}
+
+.tool-panel .hyperlink.call-row:hover {
+    -fx-background-color: -md-surface-container;
+}
+
+.tool-panel .hyperlink.call-row.selected {
+    -fx-background-color: -md-secondary-container;
+    -fx-text-fill: -md-on-secondary-container;
+}
+
+.tool-panel .hyperlink.call-row.failed {
+    -fx-text-fill: -md-error;
+}

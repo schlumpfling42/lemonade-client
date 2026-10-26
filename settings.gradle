@@ -1,0 +1,9 @@
+plugins {
+    // Lets Gradle download the Java 27 toolchain on machines that don't have it (e.g. Windows)
+    id 'org.gradle.toolchains.foojay-resolver-convention' version '1.0.0'
+}
+
+rootProject.name = 'local-assistant'
+
+include 'graph-annotations' // @Graph, @Node, @Edge, ... for declaring LangGraph4j graphs
+include 'graph-processor'   // compile-time processor: validates graphs, generates <Graph>Definition classes

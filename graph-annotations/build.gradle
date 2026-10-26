@@ -1,0 +1,5 @@
+plugins {
+    id 'java-library'
+}
+
+description = 'Annotations for declaring LangGraph4j graphs'

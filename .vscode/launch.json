@@ -1,0 +1,36 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "java",
+            "name": "Launcher",
+            "request": "launch",
+            "mainClass": "net.rka.ai.Launcher",
+            "projectName": "langchain"
+        },
+        {
+            "type": "java",
+            "name": "Chat UI (JavaFX)",
+            "request": "launch",
+            "mainClass": "net.rka.ai.ui.Launcher",
+            "vmArgs": "--enable-native-access=ALL-UNNAMED",
+            "envFile": "${workspaceFolder}/.env"
+        },
+        {
+            "type": "java",
+            "name": "CLI",
+            "request": "launch",
+            "mainClass": "net.rka.ai.cli.Main",
+            "args": "${input:question}",
+            "envFile": "${workspaceFolder}/.env"
+        }
+    ],
+    "inputs": [
+        {
+            "id": "question",
+            "type": "promptString",
+            "description": "Question for the agent",
+            "default": "What is today's date, and what is 1234.5 multiplied by 42?"
+        }
+    ]
+}

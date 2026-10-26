@@ -1,0 +1,109 @@
+plugins {
+    id 'java'
+    id 'application'
+}
+
+group = 'net.rka.ai'
+version = '1.0.0'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(27)
+    }
+}
+
+ext {
+    javafxVersion = '27'
+    // JavaFX ships native code per OS, published as a Maven classifier
+    def os = System.getProperty('os.name').toLowerCase()
+    def arm = System.getProperty('os.arch') in ['aarch64', 'arm64']
+    javafxPlatform = os.contains('win') ? 'win'
+            : os.contains('mac') ? (arm ? 'mac-aarch64' : 'mac')
+            : (arm ? 'linux-aarch64' : 'linux')
+}
+
+repositories {
+    mavenCentral()
+}
+
+// Shared setup for the graph-annotations and graph-processor subprojects
+subprojects {
+    apply plugin: 'java'
+    group = rootProject.group
+    version = rootProject.version
+    java {
+        toolchain {
+            languageVersion = JavaLanguageVersion.of(27)
+        }
+    }
+    repositories {
+        mavenCentral()
+    }
+}
+
+dependencies {
+    // Graph annotations, checked at compile time; the processor generates <Graph>Definition classes
+    implementation project(':graph-annotations')
+    annotationProcessor project(':graph-processor')
+
+    // LangChain4j: OpenAI-compatible client (Lemonade exposes an OpenAI API)
+    implementation 'dev.langchain4j:langchain4j:1.22.0'
+    implementation 'dev.langchain4j:langchain4j-open-ai:1.22.0'
+
+    // LangGraph4j: stateful graph orchestration
+    implementation 'org.bsc.langgraph4j:langgraph4j-core:1.9.5'
+    implementation 'org.bsc.langgraph4j:langgraph4j-langchain4j:1.9.5' // serializers for LC4j messages
+
+    // LangSmith tracing via its OpenTelemetry (OTLP) endpoint
+    implementation platform('io.opentelemetry:opentelemetry-bom:1.67.0')
+    implementation 'io.opentelemetry:opentelemetry-sdk'
+    implementation 'io.opentelemetry:opentelemetry-exporter-otlp'
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.22.1' // local JSONL trace files
+
+    // Markdown in the chat window's assistant messages (CommonMark + GitHub tables)
+    implementation 'org.commonmark:commonmark:0.28.0'
+    implementation 'org.commonmark:commonmark-ext-gfm-tables:0.28.0'
+
+    // fetchPage: HTML to readable text
+    implementation 'org.jsoup:jsoup:1.18.3'
+
+    // JavaFX UI
+    ['base', 'graphics', 'controls'].each { module ->
+        implementation "org.openjfx:javafx-${module}:${javafxVersion}:${javafxPlatform}"
+    }
+    // RichTextArea (incubator): read-only rich text with selection and copy, used for chat bubbles
+    implementation "org.openjfx:jfx-incubator-richtext:${javafxVersion}:${javafxPlatform}"
+    implementation "org.openjfx:jfx-incubator-input:${javafxVersion}:${javafxPlatform}"
+
+    runtimeOnly 'org.slf4j:slf4j-simple:2.0.17'
+
+    testImplementation platform('org.junit:junit-bom:6.1.3')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+}
+
+application {
+    // `./gradlew run` opens the JavaFX chat window
+    mainClass = 'net.rka.ai.ui.Launcher'
+    // JavaFX loads native libraries; allow it without a startup warning
+    applicationDefaultJvmArgs = ['--enable-native-access=ALL-UNNAMED']
+}
+
+// `./gradlew runCli --args="question"` asks one question on the command line
+tasks.register('runCli', JavaExec) {
+    group = 'application'
+    description = 'Runs the command-line agent.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'net.rka.ai.cli.Main'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    standardInput = System.in // for approving terminal/SSH commands
+}
+
+// Keep method parameter names so LangChain4j can expose them to the LLM as tool argument names
+tasks.withType(JavaCompile).configureEach {
+    options.compilerArgs << '-parameters'
+}
