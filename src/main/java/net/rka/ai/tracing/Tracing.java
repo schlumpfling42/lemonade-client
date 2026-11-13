@@ -64,13 +64,13 @@ public final class Tracing implements AutoCloseable {
         SdkTracerProviderBuilder builder = SdkTracerProvider.builder()
                 .setSpanLimits(io.opentelemetry.sdk.trace.SpanLimits.builder().setMaxNumberOfAttributes(4096).build())
                 .setResource(Resource.getDefault().merge(Resource.create(Attributes.of(
-                        AttributeKey.stringKey("service.name"), "langchain-example"))));
+                        AttributeKey.stringKey("service.name"), "lemonade-client"))));
         List<String> destinations = new ArrayList<>();
 
         String apiKey = Env.get("LANGSMITH_API_KEY", null);
         if (apiKey != null) {
             String endpoint = Env.get("LANGSMITH_ENDPOINT", "https://api.smith.langchain.com");
-            String project = Env.get("LANGSMITH_PROJECT", "langchain-example");
+            String project = Env.get("LANGSMITH_PROJECT", "lemonade-client");
             // Each processor is an independent destination; both may be active at once
             builder.addSpanProcessor(BatchSpanProcessor.builder(OtlpHttpSpanExporter.builder()
                     .setEndpoint(endpoint + "/otel/v1/traces")

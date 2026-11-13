@@ -1,4 +1,4 @@
-# langchain-example
+# lemonade-client
 
 A minimal Java agent built with **LangChain4j** (LLM client + tools) and **LangGraph4j** (graph orchestration).
 It has a **JavaFX** chat window and a command-line mode, and targets **Java 27** through a Gradle toolchain (Gradle finds JDKs in `~/.jdks`).
@@ -410,7 +410,7 @@ Set these as environment variables or in a `.env` file in the project folder (en
 | `LEMONADE_MODEL`      | `user.gpt-oss-20b`                   | Any model id from `/api/v1/models` (needs tool calling) |
 | `LEMONADE_API_KEY`    | `lemonade`                           | Only if your server requires a key   |
 | `LANGSMITH_API_KEY`   | *(unset = LangSmith off)*            | LangSmith API key                    |
-| `LANGSMITH_PROJECT`   | `langchain-example`                  | LangSmith project name               |
+| `LANGSMITH_PROJECT`   | `lemonade-client`                  | LangSmith project name               |
 | `LOCAL_TRACES`        | `true`                               | Write traces to local JSONL files    |
 | `TRACE_DIR`           | `traces`                             | Folder for local trace files         |
 | `SSH_HOSTS`           | *(none)*                             | Comma-separated hosts the SSH tool may use, e.g. `rka@192.168.68.59` |
@@ -438,7 +438,7 @@ Set these as environment variables or in a `.env` file in the project folder (en
 
 ```fish
 set -x LEMONADE_BASE_URL http://my-lemonade-host:13305/api/v1
-set -x LANGSMITH_PROJECT langchain-example
+set -x LANGSMITH_PROJECT lemonade-client
 ./gradlew run                                      # JavaFX chat window
 ./gradlew runCli --args="What is 1234.5 times 42?" # one question on the command line
 ```
