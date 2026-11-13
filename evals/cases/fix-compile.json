@@ -1,0 +1,10 @@
+{
+  "id": "fix-compile",
+  "description": "Repair a project that does not compile",
+  "fixture": "broken",
+  "prompt": "The project does not compile: javac src/Basket.java src/Main.java fails. Fix it so it builds and runs.",
+  "expectCodingJob": true,
+  "checks": [
+    { "type": "command", "command": "javac -d out src/Basket.java src/Main.java && java -cp out Main", "outputContains": "3 items, 515 cents" }
+  ]
+}

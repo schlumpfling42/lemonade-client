@@ -1,0 +1,13 @@
+{
+  "id": "loop-statement",
+  "description": "Add a statement at the start of a for loop body",
+  "fixture": "shop",
+  "prompt": "In Order.total, at the start of the for loop body, skip the items whose quantity is 0 with continue.",
+  "expectCodingJob": true,
+  "checks": [
+    { "type": "fileContains", "path": "src/shop/Order.java", "regex": "quantity\\(\\)\\s*==\\s*0" },
+    { "type": "fileContains", "path": "src/shop/Order.java", "regex": "continue\\s*;" },
+    { "type": "fileContains", "path": "src/shop/Order.java", "text": "sum += item.price() * item.quantity();" },
+    { "type": "command", "command": "javac -d out src/shop/*.java && java -cp out shop.Main", "outputContains": "total 1620" }
+  ]
+}

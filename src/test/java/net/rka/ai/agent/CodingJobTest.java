@@ -43,10 +43,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class CodingJobTest {
 
-    private static final String GOAL = "Create a Java project";
-    private static final String FINDINGS = "The folder is empty.";
-    // One step that changes nothing and no verify commands: the job needs no real command
-    private static final String PLAN = "{\"summary\":\"Look\",\"steps\":[{\"description\":\"Look around\"}]}";
+    private static final String GOAL = "Add a note";
+    // The folder is empty, so the job asks no question about files: the plan creates one file, the edit writes it
+    private static final String PLAN = "{\"summary\":\"Add a note\",\"changes\":[{\"file\":\"note.txt\",\"action\":\"create\",\"intent\":\"the note\"}]}";
+    private static final String PLAN_KOTLIN = "{\"summary\":\"Add a note\",\"changes\":[{\"file\":\"note.txt\",\"action\":\"create\",\"intent\":\"the note, in the Kotlin DSL\"}]}";
+    private static final String REVISE_CHANGE = "{\"kind\":\"change\",\"points\":[\"use the Kotlin DSL\"],\"answer\":\"\"}";
+    private static final String EDIT = "```\nhello\n```";
     private static final String FINAL = "The coding job is done.";
 
     @TempDir
@@ -64,6 +66,10 @@ class CodingJobTest {
 
         @Override
         public ChatResponse chat(ChatRequest request) {
+            // The intent check after a passing build is answered on the side, so the scripts of the other steps stay as they are
+            if (request.messages().toString().contains("checking a finished coding change") || request.messages().toString().contains("checking a plan for a coding job")) {
+                return ChatResponse.builder().aiMessage(AiMessage.from("OK")).build();
+            }
             requests.add(request);
             AiMessage answer = answers.poll();
             if (answer == null) throw new AssertionError("Unexpected model request: " + request.messages());
@@ -77,7 +83,15 @@ class CodingJobTest {
         final List<CodingPlan> plans = new ArrayList<>();
         final List<PlanReview> reviews = new ArrayList<>();
         final List<ToolExecutionRequest> reviewedCalls = new ArrayList<>();
+        final List<net.rka.ai.agent.skills.SkillQuestion> questions = new ArrayList<>();
+        final Deque<net.rka.ai.agent.skills.SkillAnswer> answersToQuestions = new ArrayDeque<>();
         boolean approveCalls;
+
+        @Override
+        public net.rka.ai.agent.skills.SkillAnswer askUser(net.rka.ai.agent.skills.SkillQuestion question) {
+            questions.add(question);
+            return answersToQuestions.remove();
+        }
 
         @Override
         public Map<String, Boolean> review(List<ToolExecutionRequest> calls) {
@@ -107,12 +121,22 @@ class CodingJobTest {
         EnvironmentInfo environment = new EnvironmentInfo(dir.resolve("environment.json"),
                 command -> "exit code: 0\n--- stdout ---\nv1 of " + command, Clock.systemUTC());
         agent = new Agent("test", "scripted", model, Tracing.off(),
-                ToolRegistry.of(new FileTools(), new TerminalTools(), new CodingTools(), new CodingGraphTest.FakeWebTools()),
+                ToolRegistry.of(new FileTools(), new net.rka.ai.tools.OutlineTools(), new net.rka.ai.tools.JavaTools(), new TerminalTools(), new CodingTools(),
+                        new CodingGraphTest.FakeWebTools()),
                 approver, environment);
     }
 
     private void answers(String... texts) {
         Arrays.stream(texts).map(AiMessage::from).forEach(model.answers::add);
+    }
+
+    /** What the analysis answers: a call of a function (the model's native way to decide). */
+    private static AiMessage call(String name, String arguments) {
+        return AiMessage.from(List.of(ToolExecutionRequest.builder().id("a" + System.nanoTime()).name(name).arguments(arguments).build()));
+    }
+
+    private static AiMessage route(String goal, String edge) {
+        return call("route", "{\"goal\":\"" + goal + "\",\"edge\":\"" + edge + "\"}");
     }
 
     /** One turn: the user asks for the goal; returns the messages the turn produced. */
@@ -152,9 +176,9 @@ class CodingJobTest {
     }
 
     @Test
-    void agentStartsAJobAndAnswersWithTheReport() {
+    void agentStartsAJobAndAnswersWithTheReport() throws Exception {
         model.answers.add(AiMessage.from(START));
-        answers(FINDINGS, PLAN, PLAN, "Looked around.", FINAL);
+        answers(PLAN, EDIT);
         approver.decisions.add(new PlanDecision(PlanDecision.Kind.APPROVE, ""));
 
         List<ChatMessage> produced = run();
@@ -164,19 +188,246 @@ class CodingJobTest {
         assertEquals(List.of(START), ((AiMessage) produced.get(0)).toolExecutionRequests());
         ToolExecutionResultMessage report = assertInstanceOf(ToolExecutionResultMessage.class, produced.get(1));
         assertEquals(START.id(), report.id());
-        assertTrue(report.text().startsWith("Done"), report.text());
+        assertTrue(report.text().startsWith("Done: every change is made"), report.text());
         assertFalse(Boolean.TRUE.equals(report.isError()), report.text());
-        assertEquals(FINAL, ((AiMessage) produced.get(2)).text());
+        assertTrue(((AiMessage) produced.get(2)).text().startsWith("Done: every change is made"), produced.get(2).toString());
         assertEquals(List.of(CodingPlan.parse(PLAN)), approver.plans);
-        // The agent was asked again with the report: the last request ends with the job's result
-        assertEquals(report, model.requests.getLast().messages().getLast());
+        assertEquals("hello\n", Files.readString(folder.resolve("note.txt"))); // the graph applied the edit
+        // A job that is done answers the user itself: the agent is not asked again
+        assertFalse(model.requests.stream().anyMatch(r -> r.messages().getLast() == report), "no model call after the report");
         assertTrue(model.answers.isEmpty());
+    }
+
+    @Test
+    void triageStartsTheCodingSkillBeforeTheAgentDoesAnything() {
+        agent.triage(true);
+        model.answers.add(route(GOAL, "job_plan")); // the analysis; the agent step is never asked
+        answers(PLAN, EDIT);
+        approver.decisions.add(new PlanDecision(PlanDecision.Kind.APPROVE, ""));
+
+        List<ChatMessage> produced = run();
+
+        assertEquals(3, produced.size(), produced.toString());
+        AiMessage start = (AiMessage) produced.get(0);
+        assertEquals(CodingGraph.START_TOOL, start.toolExecutionRequests().get(0).name());
+        assertTrue(start.toolExecutionRequests().get(0).arguments().contains(GOAL));
+        assertEquals(start.toolExecutionRequests().get(0).id(), assertInstanceOf(ToolExecutionResultMessage.class, produced.get(1)).id());
+        // The very first request was the analysis; the next ones are the job's (the agent only answers with the report)
+        ChatRequest analysis = model.requests.get(0);
+        assertEquals(GOAL, ((UserMessage) analysis.messages().getLast()).singleText(), "the conversation as it is, the user's message last");
+        assertTrue(analysis.toolSpecifications().stream().anyMatch(t -> t.name().equals("route")), "the model is offered the function route");
+        assertEquals(dev.langchain4j.model.chat.request.ToolChoice.REQUIRED, analysis.parameters().toolChoice(), "and must call one");
+        assertTrue(((AiMessage) produced.get(2)).text().startsWith("Done: every change is made"), produced.get(2).toString());
+        assertTrue(model.answers.isEmpty());
+    }
+
+    @Test
+    void aQuestionOfTheAnalysisIsAskedTheAnswerBecomesPartOfTheConversationAndTheAnalysisRunsAgain() {
+        agent.triage(true);
+        model.answers.add(call("ask_user", "{\"question\":\"Which file?\",\"options\":[\"note.txt\",\"other.txt\"]}"));
+        model.answers.add(route(GOAL + " in note.txt", "job_plan"));
+        answers(PLAN, EDIT);
+        approver.answersToQuestions.add(new net.rka.ai.agent.skills.SkillAnswer("note.txt", ""));
+        approver.decisions.add(new PlanDecision(PlanDecision.Kind.APPROVE, ""));
+
+        List<ChatMessage> produced = run();
+
+        assertEquals(1, approver.questions.size());
+        assertEquals("Which file?", approver.questions.get(0).question());
+        assertEquals(List.of("note.txt", "other.txt"), approver.questions.get(0).choices());
+        // The question and the answer are in the conversation, in order, before the job
+        assertEquals("Which file?", ((AiMessage) produced.get(0)).text());
+        assertEquals("note.txt", ((UserMessage) produced.get(1)).singleText());
+        assertEquals(CodingGraph.START_TOOL, ((AiMessage) produced.get(2)).toolExecutionRequests().get(0).name());
+        assertTrue(((AiMessage) produced.get(2)).toolExecutionRequests().get(0).arguments().contains("in note.txt"), produced.get(2).toString());
+        // The second analysis saw the question and the answer
+        List<ChatMessage> seen = model.requests.get(1).messages();
+        assertEquals("Which file?", ((AiMessage) seen.get(seen.size() - 2)).text());
+        assertEquals("note.txt", ((UserMessage) seen.getLast()).singleText());
+        assertEquals("Add a note", GOAL);
+        assertTrue(model.answers.isEmpty());
+    }
+
+    @Test
+    void aToolCallOfTheAnalysisRunsItsResultGoesBackToTheAnalysisAndTheTurnGoesOn() throws Exception {
+        Files.writeString(folder.resolve("a.txt"), "hello there");
+        agent.triage(true);
+        model.answers.add(call("searchFiles", "{\"pattern\":\"hello\"}"));
+        model.answers.add(route("g", "agent"));
+        answers("It is in a.txt.");
+
+        List<ChatMessage> produced = run();
+
+        // The call and its result are in the conversation; then the answer of the agent
+        AiMessage call = (AiMessage) produced.get(0);
+        assertEquals("searchFiles", call.toolExecutionRequests().get(0).name());
+        assertEquals(call.toolExecutionRequests().get(0).id(), assertInstanceOf(ToolExecutionResultMessage.class, produced.get(1)).id());
+        assertTrue(((ToolExecutionResultMessage) produced.get(1)).text().contains("a.txt"), produced.get(1).toString());
+        assertEquals("It is in a.txt.", ((AiMessage) produced.get(2)).text());
+        // The second analysis saw what the tool found
+        List<ChatMessage> seen = model.requests.get(1).messages();
+        assertTrue(seen.getLast() instanceof ToolExecutionResultMessage r && r.text().contains("a.txt"), seen.getLast().toString());
+        assertTrue(seen.get(seen.size() - 2) instanceof AiMessage ai && ai.hasToolExecutionRequests(), "its call, then the result as the tool message");
+        assertTrue(model.answers.isEmpty());
+    }
+
+    @Test
+    void anAnswerOfTheUserWithoutOptionsIsTheComment() {
+        agent.triage(true);
+        model.answers.add(call("ask_user", "{\"question\":\"What should it say?\",\"options\":[]}"));
+        model.answers.add(route("g", "agent"));
+        answers("ok");
+        approver.answersToQuestions.add(new net.rka.ai.agent.skills.SkillAnswer("Go on", "say hello"));
+
+        List<ChatMessage> produced = run();
+
+        assertEquals(List.of("Go on"), approver.questions.get(0).choices());
+        assertEquals("say hello", ((UserMessage) produced.get(1)).singleText());
+        assertEquals("ok", ((AiMessage) produced.get(2)).text());
+    }
+
+    @Test
+    void triageIsAShortRequestAndLeavesOtherTurnsToTheAgent() {
+        agent.triage(true);
+        model.answers.add(route("greet the user", "agent"));
+        answers("Hello!");
+
+        List<ChatMessage> produced = run();
+
+        assertEquals(1, produced.size(), produced.toString());
+        assertEquals("Hello!", ((AiMessage) produced.get(0)).text());
+        ChatRequest triage = model.requests.get(0);
+        ChatRequest agentStep = model.requests.get(1);
+        // The analysis is one request of its own: its short system message and the user's message, the function route, a required call
+        assertEquals(2, triage.messages().size());
+        assertEquals(dev.langchain4j.model.chat.request.ToolChoice.REQUIRED, triage.parameters().toolChoice());
+        assertTrue(agentStep.messages().size() > 1);
+    }
+
+    @Test
+    void aBigHandEditOfExistingCodeBecomesACodingJob() throws Exception {
+        Files.writeString(folder.resolve("A.java"), "class A {}\n");
+        // The model skips startCodingJob and starts rewriting a source file: that is coding work
+        String edit = "{\"path\":\"A.java\",\"section\":\"A\",\"md5\":\"m\",\"newText\":\"" + "x".repeat(300) + "\"}";
+        model.answers.add(AiMessage.from(ToolExecutionRequest.builder().id("e1").name("editSection").arguments(edit).build()));
+        answers("{\"files\":[]}", PLAN, EDIT); // the job asks which files first: the folder has one
+        approver.decisions.add(new PlanDecision(PlanDecision.Kind.APPROVE, ""));
+
+        List<ChatMessage> produced = run();
+
+        // The conversation sees a startCodingJob call with the user's request, its report and the answer;
+        // the edit never ran and isn't in the conversation
+        assertEquals(3, produced.size(), produced.toString());
+        List<ToolExecutionRequest> calls = ((AiMessage) produced.get(0)).toolExecutionRequests();
+        assertEquals(1, calls.size());
+        assertEquals(CodingGraph.START_TOOL, calls.get(0).name());
+        assertTrue(calls.get(0).arguments().contains(GOAL), calls.get(0).arguments());
+        assertEquals(calls.get(0).id(), assertInstanceOf(ToolExecutionResultMessage.class, produced.get(1)).id());
+        assertEquals("class A {}\n", Files.readString(folder.resolve("A.java")));
+        assertEquals(List.of(), approver.reviewedCalls); // nothing was asked for approval
+        assertTrue(((AiMessage) produced.get(2)).text().startsWith("Done: every change is made"), produced.get(2).toString());
+    }
+
+    @Test
+    void aReplyThatAnnouncesAnActionIsAskedOnceMore() {
+        answers("Let me change it:", "Nothing to change.");
+
+        List<ChatMessage> produced = run();
+
+        // The nudge isn't part of the conversation; the second answer replaces the announcement
+        assertEquals(1, produced.size(), produced.toString());
+        assertEquals("Nothing to change.", ((AiMessage) produced.get(0)).text());
+        assertEquals(2, model.requests.size());
+        assertEquals(AgentGraph.ANNOUNCED_NUDGE, ((UserMessage) model.requests.get(1).messages().getLast()).singleText());
+    }
+
+    @Test
+    void anAnnouncementOfAChangeToASourceFileStartsAJobWithoutAskingAgain() {
+        answers("Let me make these changes to the ChatWindow.java file:");
+        answers(PLAN, EDIT);
+        approver.decisions.add(new PlanDecision(PlanDecision.Kind.APPROVE, ""));
+
+        List<ChatMessage> produced = run();
+
+        assertEquals(3, produced.size(), produced.toString());
+        AiMessage first = (AiMessage) produced.get(0);
+        assertEquals("Let me make these changes to the ChatWindow.java file:", first.text()); // what it said stays
+        assertEquals(CodingGraph.START_TOOL, first.toolExecutionRequests().get(0).name());
+        assertTrue(first.toolExecutionRequests().get(0).arguments().contains(GOAL));
+        assertFalse(model.requests.stream().anyMatch(r -> text(r).contains(AgentGraph.ANNOUNCED_NUDGE)), "no nudge first");
+        assertTrue(((AiMessage) produced.get(2)).text().startsWith("Done: every change is made"), produced.get(2).toString());
+    }
+
+    @Test
+    void anAnnouncementKeepsItsTextAndTakesTheCallThatFollows() throws Exception {
+        Files.writeString(folder.resolve("a.txt"), "hello");
+        model.answers.add(AiMessage.from("Let me read it:"));
+        model.answers.add(AiMessage.from(ToolExecutionRequest.builder().id("r1").name("readFile")
+                .arguments("{\"path\":\"a.txt\"}").build()));
+        answers("It says hello.");
+
+        List<ChatMessage> produced = run();
+
+        assertEquals(3, produced.size(), produced.toString()); // the reply with its call, the result, the answer
+        AiMessage first = (AiMessage) produced.get(0);
+        assertEquals("Let me read it:", first.text());
+        assertEquals("readFile", first.toolExecutionRequests().get(0).name());
+        assertEquals("It says hello.", ((AiMessage) produced.get(2)).text());
+    }
+
+    @Test
+    void noSecondJobStartsInATurnThatAlreadyRanOne() {
+        // The job runs; afterwards the agent announces another change to a source file: that must not start the same
+        // job again (each would end the same way, and the turn would loop). The announcement is asked about once instead.
+        model.answers.add(AiMessage.from(START));
+        answers(PLAN);
+        answers("Let me change the ChatWindow.java file:", "Nothing more to do.");
+        approver.decisions.add(new PlanDecision(PlanDecision.Kind.DENY, ""));
+
+        List<ChatMessage> produced = run();
+
+        long jobs = produced.stream().filter(m -> m instanceof AiMessage ai
+                && ai.toolExecutionRequests().stream().anyMatch(c -> CodingGraph.START_TOOL.equals(c.name()))).count();
+        assertEquals(1, jobs, produced.toString());
+        assertEquals("Nothing more to do.", ((AiMessage) produced.getLast()).text());
+        assertTrue(model.answers.isEmpty());
+    }
+
+    @Test
+    void afterAJobTheAgentChangesNoFilesItself() throws Exception {
+        model.answers.add(AiMessage.from(START));
+        answers(PLAN);
+        // The job is over; the agent now tries to write a file by hand (as a model does when a job stopped)
+        model.answers.add(AiMessage.from(ToolExecutionRequest.builder().id("w1").name("writeFile")
+                .arguments("{\"path\":\"other.txt\",\"content\":\"x\"}").build()));
+        approver.decisions.add(new PlanDecision(PlanDecision.Kind.DENY, ""));
+
+        List<ChatMessage> produced = run();
+
+        assertEquals(3, produced.size(), produced.toString()); // the call, the result of the denied job, the reply
+        assertTrue(((AiMessage) produced.getLast()).text().startsWith(AgentGraph.NO_CHANGES_AFTER_JOB), ((AiMessage) produced.getLast()).text());
+        assertFalse(Files.exists(folder.resolve("other.txt")));
+        assertEquals(List.of(), approver.reviewedCalls);
+        assertTrue(model.answers.isEmpty());
+    }
+
+    @Test
+    void aTinyEditOfCodeStaysADirectEdit() throws Exception {
+        Files.writeString(folder.resolve("A.java"), "class A {}\n");
+        String edit = "{\"path\":\"A.java\",\"section\":\"A\",\"md5\":\"m\",\"newText\":\"B\"}";
+        model.answers.add(AiMessage.from(ToolExecutionRequest.builder().id("e1").name("editSection").arguments(edit).build()));
+        answers("Not changed.");
+
+        List<ChatMessage> produced = run();
+
+        assertEquals("editSection", ((AiMessage) produced.get(0)).toolExecutionRequests().get(0).name());
+        assertEquals(1, approver.reviewedCalls.size()); // asked as usual (and denied)
     }
 
     @Test
     void progressReportsPhasesInOrder() {
         model.answers.add(AiMessage.from(START));
-        answers(FINDINGS, PLAN, PLAN, "Looked around.", FINAL);
+        answers(PLAN, EDIT);
         approver.decisions.add(new PlanDecision(PlanDecision.Kind.APPROVE, ""));
         List<String> phases = new ArrayList<>();
 
@@ -184,15 +435,15 @@ class CodingJobTest {
         agent.run(history, "thread", new Settings(folder, List.of()), ConversationSummary.EMPTY, List.of(),
                 progress -> phases.add(progress.phase()));
 
-        // Each phase once: the job ran every node a single time (no tool calls, no revision)
-        assertEquals(List.of("Checking tools", "Investigating", "Planning", "Reviewing plan", "Step 1/1",
+        // Each phase once: the job ran every node a single time (the empty folder has no files to find)
+        assertEquals(List.of("Checking tools", "Finding the code", "Finding the code", "Planning", "Setting up", "Change 1/1",
                 "Verifying (attempt 1/3)", "Writing report"), phases);
     }
 
     @Test
     void messagesArriveLiveInOrder() {
         model.answers.add(AiMessage.from(START));
-        answers(FINDINGS, PLAN, PLAN, "Looked around.", FINAL);
+        answers(PLAN, EDIT);
         approver.decisions.add(new PlanDecision(PlanDecision.Kind.APPROVE, ""));
         List<String> seen = new ArrayList<>();
         Progress.ProgressListener listener = new Progress.ProgressListener() {
@@ -211,12 +462,11 @@ class CodingJobTest {
         Agent.Turn turn = agent.run(history, "thread", new Settings(folder, List.of()), ConversationSummary.EMPTY,
                 List.of(), listener);
 
-        // The start call shows before the job works; the job's replies come as they happen (its own
-        // prompts are not passed on); the report and the final answer arrive last, once each
+        // The start call shows before the job works; the job answers in data, not in messages (the plan and the
+        // code are not chat); the report and the final answer arrive last, once each
         assertEquals("main AI", seen.getFirst(), seen.toString());
-        int findings = seen.indexOf("job AI");
-        assertTrue(findings > 0 && findings < seen.indexOf("progress Planning"), seen.toString());
-        assertFalse(seen.contains("job USER"), seen.toString());
+        assertTrue(seen.indexOf("progress Planning") > 0, seen.toString());
+        assertTrue(seen.stream().noneMatch(m -> m.startsWith("job ")), seen.toString());
         assertEquals(List.of("main AI", "main TOOL_EXECUTION_RESULT", "main AI"),
                 seen.stream().filter(s -> s.startsWith("main")).toList());
         assertEquals("main AI", seen.getLast());
@@ -229,10 +479,10 @@ class CodingJobTest {
         EnvironmentInfo environment = new EnvironmentInfo(dir.resolve("environment.json"),
                 command -> "exit code: 0", Clock.systemUTC());
         Agent withPlans = new Agent("test", "scripted", model, Tracing.off(),
-                ToolRegistry.of(new FileTools(), new TerminalTools(), new CodingTools()), approver, environment,
+                ToolRegistry.of(new FileTools(), new net.rka.ai.tools.OutlineTools(), new net.rka.ai.tools.JavaTools(), new TerminalTools(), new CodingTools()), approver, environment,
                 new LiveChannel(), plans);
         model.answers.add(AiMessage.from(START));
-        answers(FINDINGS, PLAN, PLAN, "Looked around.", FINAL);
+        answers(PLAN, EDIT);
         approver.decisions.add(new PlanDecision(PlanDecision.Kind.APPROVE, ""));
         List<String> jobTexts = new ArrayList<>();
         List<String> planFiles = new ArrayList<>();
@@ -249,10 +499,9 @@ class CodingJobTest {
         List<ChatMessage> history = new ArrayList<>(List.of(SystemMessage.from("system"), UserMessage.from(GOAL)));
         withPlans.run(history, "thread", new Settings(folder, List.of()), ConversationSummary.EMPTY, List.of(), listener);
 
-        // The findings and step summary are shown; the plan JSON (plan and review answers) is not
-        assertTrue(jobTexts.contains(FINDINGS), jobTexts.toString());
-        assertTrue(jobTexts.stream().noneMatch(t -> t.contains("\"steps\"")), jobTexts.toString());
-        // The dialog was told the file; the listener heard of it after review and after the report
+        // Neither the plan JSON nor the written code is chat
+        assertEquals(List.of(), jobTexts);
+        // The dialog was told the file; the listener heard of it once the plan was valid and after the report
         String file = approver.reviews.getFirst().planFile();
         assertTrue(file.startsWith(plans.toAbsolutePath().toString()), file);
         assertEquals(List.of(file, file), planFiles);
@@ -265,7 +514,7 @@ class CodingJobTest {
     @Test
     void failingProgressListenerDoesNotBreakTheRun() {
         model.answers.add(AiMessage.from(START));
-        answers(FINDINGS, PLAN, PLAN, "Looked around.", FINAL);
+        answers(PLAN, EDIT);
         approver.decisions.add(new PlanDecision(PlanDecision.Kind.APPROVE, ""));
 
         List<ChatMessage> history = new ArrayList<>(List.of(SystemMessage.from("system"), UserMessage.from(GOAL)));
@@ -293,7 +542,7 @@ class CodingJobTest {
     @Test
     void planApprovalPausesAndUsesTheDecision() {
         model.answers.add(AiMessage.from(START));
-        answers(FINDINGS, PLAN, PLAN, PLAN, PLAN, "Looked around.", FINAL);
+        answers(PLAN, REVISE_CHANGE, PLAN_KOTLIN, EDIT);
         approver.decisions.add(new PlanDecision(PlanDecision.Kind.REVISE, "use the Kotlin DSL"));
         approver.decisions.add(new PlanDecision(PlanDecision.Kind.APPROVE, ""));
 
@@ -303,10 +552,10 @@ class CodingJobTest {
         assertFalse(approver.reviews.get(0).revision());
         PlanReview revised = approver.reviews.get(1);
         assertTrue(revised.revision());
-        assertEquals("use the Kotlin DSL", revised.userComment()); // read before implement clears it
+        assertEquals("use the Kotlin DSL", revised.userComment()); // read before the plan approval step clears it
         assertTrue(revised.toMarkdown().startsWith("Revised plan: you asked: use the Kotlin DSL"), revised.toMarkdown());
-        ChatRequest replan = model.requests.get(4); // agent, investigate, plan, review, then the revision
-        assertTrue(replan.messages().getFirst() instanceof SystemMessage s && s.text().startsWith(codingPrompt("plan")));
+        ChatRequest replan = model.requests.get(3); // agent, plan, the reading of the comment, then the revision
+        assertTrue(replan.messages().get(1) instanceof UserMessage u && u.singleText().startsWith(codingPrompt("plan")));
         assertTrue(text(replan).contains("use the Kotlin DSL"), text(replan));
         assertEquals(3, produced.size(), produced.toString());
         assertTrue(((ToolExecutionResultMessage) produced.get(1)).text().startsWith("Done"));
@@ -365,27 +614,23 @@ class CodingJobTest {
     }
 
     @Test
-    void trustedCommandAfterAJobThatReadTheWebAsks() {
-        ToolExecutionRequest fetch = ToolExecutionRequest.builder()
-                .id("w1").name("fetchPage").arguments("{\"url\":\"https://example.com\"}").build();
+    void aTrustedCommandStillRunsAfterAJobBecauseTheJobReadNoWeb() {
         ToolExecutionRequest trusted = ToolExecutionRequest.builder()
                 .id("t1").name("runCommand").arguments("{\"command\":\"echo trusted\"}").build();
         model.answers.add(AiMessage.from(START));
-        model.answers.add(AiMessage.from(fetch)); // the job's investigation reads a page
-        answers(FINDINGS, PLAN, PLAN, "Looked around.");
+        answers(PLAN);
         model.answers.add(AiMessage.from(trusted)); // back in the main loop: the user's trusted command
         answers(FINAL);
-        approver.decisions.add(new PlanDecision(PlanDecision.Kind.APPROVE, ""));
+        approver.decisions.add(new PlanDecision(PlanDecision.Kind.DENY, ""));
 
         List<ChatMessage> produced = run(List.of("echo trusted"));
 
-        // The page came in inside the job, so for the rest of the turn the trusted command asks
-        assertEquals(List.of(trusted), approver.reviewedCalls);
-        ToolExecutionResultMessage denied = produced.stream()
+        // A job has no tools, so it can't bring web content into the turn: the trusted command runs without asking
+        assertEquals(List.of(), approver.reviewedCalls);
+        ToolExecutionResultMessage ran = produced.stream()
                 .filter(m -> m instanceof ToolExecutionResultMessage r && r.id().equals("t1"))
                 .map(ToolExecutionResultMessage.class::cast).findFirst().orElseThrow();
-        assertTrue(denied.isError(), denied.text());
-        assertFalse(denied.text().contains("exit code"), denied.text()); // it never ran
+        assertTrue(ran.text().startsWith("exit code: 0") && ran.text().contains("trusted"), ran.text());
         assertEquals(FINAL, ((AiMessage) produced.getLast()).text());
     }
 
@@ -400,9 +645,10 @@ class CodingJobTest {
         List<ChatMessage> produced = run();
 
         assertEquals(AgentGraph.MAX_AGENT_ROUNDS + 1, model.requests.size());
-        // The last request offers no tools and asks for an answer
+        // The last request asks for an answer; it still lists the tools (the same prompt start as the round
+        // before, so the model server reuses its cache), but any call it makes is dropped
         ChatRequest last = model.requests.getLast();
-        assertTrue(last.toolSpecifications() == null || last.toolSpecifications().isEmpty(), last.toolSpecifications().toString());
+        assertEquals(model.requests.get(model.requests.size() - 2).toolSpecifications(), last.toolSpecifications());
         assertTrue(text(last).contains("rounds of tool calls"), text(last));
         // Its calls were stripped: the turn ends with an answer and nothing open
         AiMessage answer = assertInstanceOf(AiMessage.class, produced.getLast());
@@ -414,7 +660,7 @@ class CodingJobTest {
     @Test
     void deniedPlanAnswersTheToolCallWithAnError() throws Exception {
         model.answers.add(AiMessage.from(START));
-        answers(FINDINGS, PLAN, PLAN, "I didn't change anything, as you denied the plan.");
+        answers(PLAN, "I didn't change anything, as you denied the plan.");
         approver.decisions.add(new PlanDecision(PlanDecision.Kind.DENY, ""));
 
         List<ChatMessage> produced = run();
@@ -424,7 +670,7 @@ class CodingJobTest {
         assertTrue(report.isError(), report.text());
         assertTrue(report.text().contains("denied"), report.text());
         assertInstanceOf(AiMessage.class, produced.get(2)); // the agent still answers the user
-        assertEquals(5, model.requests.size()); // nothing of the job ran after the deny
+        assertEquals(3, model.requests.size()); // agent, plan, agent: nothing of the job ran after the deny
         try (var files = Files.list(folder)) {
             assertEquals(0, files.count());
         }

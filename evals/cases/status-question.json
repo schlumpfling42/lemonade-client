@@ -1,0 +1,12 @@
+{
+  "id": "status-question",
+  "description": "A 'where are we with X?' question is answered from the code by the plain agent: no coding job, no change (a status question once became a 26-minute coding job with a wrong answer)",
+  "fixture": "plugins",
+  "prompt": "I want a reverse renderer plugin, where are we with that?",
+  "expectCodingJob": false,
+  "checks": [
+    { "type": "answerMatches", "regex": "(?i)not (yet )?(there|exist|implemented|built|registered|started|done)|no reverse|doesn't exist|does not exist|missing|only .*upper" },
+    { "type": "fileUnchanged", "path": "Registry.java" },
+    { "type": "fileUnchanged", "path": "Main.java" }
+  ]
+}

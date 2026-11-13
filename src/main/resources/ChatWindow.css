@@ -1,0 +1,19 @@
+/* Add a new style for the conversation menu button to match the folder menu button */
+
+.conversation-menu {
+    -fx-background-color: transparent;
+    -fx-padding: 0;
+    -fx-cursor: hand;
+    -fx-font-size: 12px;
+    -fx-text-fill: -fx-text-base-color;
+}
+
+.conversation-menu .label {
+    -fx-padding: 0 4 0 4;
+}
+
+/* Ensure the button uses the same graphic as the folder menu */
+.conversation-menu .arrow {
+    -fx-shape: "M 0 0 L 8 0 L 4 5 Z";
+    -fx-fill: -fx-text-base-color;
+}

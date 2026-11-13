@@ -1,0 +1,16 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            // Gradle's javac runs the annotation processor that writes AgentGraphDefinition and the other
+            // *Definition classes; the editor's own compiler does not, so the launch configurations run
+            // the classes this task builds (see classPaths in launch.json)
+            "label": "gradle classes",
+            "type": "shell",
+            "command": ".\\gradlew.bat classes --console=plain -q",
+            "options": { "cwd": "${workspaceFolder}" },
+            "problemMatcher": ["$javac"],
+            "presentation": { "reveal": "silent", "panel": "shared" }
+        }
+    ]
+}

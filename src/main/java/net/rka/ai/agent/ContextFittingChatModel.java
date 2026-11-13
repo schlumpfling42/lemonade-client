@@ -58,6 +58,8 @@ final class ContextFittingChatModel implements ChatModel {
     static final int RESERVED_OUTPUT_TOKENS = 2048;
     /** A shortened message keeps at least this many characters (head + tail). */
     static final int MIN_KEPT_CHARS = 400;
+    /** What a message is cut to first (head + tail); only if that isn't enough, messages go down to {@link #MIN_KEPT_CHARS}. */
+    static final int STABLE_KEPT_CHARS = 2000;
     private static final int MARKER_CHARS = 120; // about the length of the "characters cut" marker
 
     // llama-server's error: "request (20403 tokens) exceeds the available context size (16384 tokens)"
@@ -84,9 +86,51 @@ final class ContextFittingChatModel implements ChatModel {
         return send(request, r -> delegate.chat(r, options));
     }
 
+    /** How often a request is sent when the model answers with nothing at all. */
+    static final int EMPTY_REPLY_TRIES = 3;
+    static final String EMPTY_REPLY = "The model returned an empty reply (tried " + EMPTY_REPLY_TRIES + " times). Ask again, or rephrase.";
+
+    /**
+     * A reply with no text and no tool call is a failed generation (a local reasoning model sometimes ends after its thinking):
+     * the same request is sent again, and when it stays empty the reply says so, so no empty message is ever stored in the
+     * conversation, where it makes every later request fail the same way.
+     */
+    private static ChatResponse answered(ChatRequest request, Function<ChatRequest, ChatResponse> call) {
+        ChatResponse response = null;
+        for (int i = 0; i < EMPTY_REPLY_TRIES; i++) {
+            response = withoutCutOffCalls(call.apply(request));
+            if (!isEmpty(response.aiMessage())) return response;
+        }
+        return ChatResponse.builder().aiMessage(AiMessage.from(EMPTY_REPLY)).modelName(response.modelName()).build();
+    }
+
+    /**
+     * An answer cut off at the token limit that ends in a tool call has a half-written call (broken arguments), which would break
+     * every later request of the chat: the call is dropped, and an answer with nothing else counts as empty.
+     */
+    private static ChatResponse withoutCutOffCalls(ChatResponse response) {
+        AiMessage reply = response.aiMessage();
+        if (response.finishReason() != dev.langchain4j.model.output.FinishReason.LENGTH || reply == null || !reply.hasToolExecutionRequests()) {
+            return response;
+        }
+        return response.toBuilder().aiMessage(reply.text() == null ? AiMessage.from("") : AiMessage.from(reply.text())).build();
+    }
+
+    private static boolean isEmpty(AiMessage reply) {
+        return reply != null && (reply.text() == null || reply.text().isBlank()) && !reply.hasToolExecutionRequests();
+    }
+
+    /** The request without the empty replies an earlier turn may have stored: they make the server answer nothing again. */
+    private static ChatRequest withoutEmptyReplies(ChatRequest request) {
+        if (request.messages().stream().noneMatch(m -> m instanceof AiMessage ai && isEmpty(ai))) return request;
+        List<ChatMessage> kept = request.messages().stream().filter(m -> !(m instanceof AiMessage ai && isEmpty(ai))).toList();
+        return request.toBuilder().messages(kept).build();
+    }
+
     /** Fits the request and sends it; on a "too big" answer from the server, corrects the estimate once and retries. */
-    private ChatResponse send(ChatRequest request, Function<ChatRequest, ChatResponse> call) {
-        ChatRequest sent = fit(request);
+    private ChatResponse send(ChatRequest request, Function<ChatRequest, ChatResponse> model) {
+        Function<ChatRequest, ChatResponse> call = r -> answered(r, model);
+        ChatRequest sent = fit(withoutEmptyReplies(request));
         try {
             return call.apply(sent);
         } catch (RuntimeException e) {
@@ -113,23 +157,28 @@ final class ContextFittingChatModel implements ChatModel {
         for (int i = messages.size() - 1; i >= 0 && lastUser < 0; i--) {
             if (messages.get(i) instanceof UserMessage) lastUser = i;
         }
-        // Pass 1: tool results, oldest first; pass 2: other texts (never the system or latest user message)
-        for (int pass = 1; pass <= 2 && excess > 0; pass++) {
-            for (int i = 0; i < messages.size() && excess > 0; i++) {
-                ChatMessage message = messages.get(i);
-                boolean candidate = pass == 1
-                        ? message instanceof ToolExecutionResultMessage
-                        : !(message instanceof SystemMessage) && !(message instanceof ToolExecutionResultMessage)
-                                && i != lastUser;
-                if (!candidate) continue;
-                String text = text(message);
-                if (text == null || text.length() <= MIN_KEPT_CHARS) continue;
-                // Cut the excess plus room for the marker line that shorten() inserts
-                int keep = (int) Math.max(MIN_KEPT_CHARS, text.length() - excess - MARKER_CHARS);
-                ChatMessage shortened = withText(message, shorten(text, keep));
-                if (shortened == null) continue;
-                excess -= characters(message) - characters(shortened);
-                messages.set(i, shortened);
+        // Messages are cut to FIXED sizes, oldest first, never "just enough": a message's shortened text then
+        // depends only on the message itself, so the next request of the turn shortens it exactly the same
+        // way and the model server can reuse its cache for everything up to the newest cut. (Cutting just the
+        // excess would change an old message on every call and make the server re-read the whole prompt.)
+        // Stage 1 cuts to STABLE_KEPT_CHARS, stage 2 (only if still too big) to MIN_KEPT_CHARS. In each stage:
+        // tool results first, then other texts; never the system message or the latest user message.
+        for (int keep : new int[] {STABLE_KEPT_CHARS, MIN_KEPT_CHARS}) {
+            for (int pass = 1; pass <= 2 && excess > 0; pass++) {
+                for (int i = 0; i < messages.size() && excess > 0; i++) {
+                    ChatMessage message = messages.get(i);
+                    boolean candidate = pass == 1
+                            ? message instanceof ToolExecutionResultMessage
+                            : !(message instanceof SystemMessage) && !(message instanceof ToolExecutionResultMessage)
+                                    && i != lastUser;
+                    if (!candidate) continue;
+                    String text = text(message);
+                    if (text == null || text.length() <= keep + MARKER_CHARS) continue; // short enough (or cut already)
+                    ChatMessage shortened = withText(message, shorten(text, keep));
+                    if (shortened == null) continue;
+                    excess -= characters(message) - characters(shortened);
+                    messages.set(i, shortened);
+                }
             }
         }
         return request.toBuilder().messages(messages).build();

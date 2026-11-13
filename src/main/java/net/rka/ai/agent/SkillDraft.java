@@ -63,7 +63,7 @@ public record SkillDraft(SkillFile skill, String json, String outline, List<Stri
 
     /**
      * The skill's limits as one line, defaults included, e.g. "**Limits:** maxSteps 40 · maxToolRounds 8 ·
-     * maxStepTurns 15": how long a run may go on, which the user should see before saving.
+     * maxEditAttempts 2": how long a run may go on, which the user should see before saving.
      */
     String limits() {
         SkillFile.Limits limits = skill.limits();

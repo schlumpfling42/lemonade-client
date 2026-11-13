@@ -16,6 +16,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -65,11 +66,79 @@ class ContextFittingChatModelTest {
     }
 
     @Test
+    void aToolCallInAnAnswerCutOffAtTheTokenLimitIsDropped() {
+        dev.langchain4j.agent.tool.ToolExecutionRequest call = dev.langchain4j.agent.tool.ToolExecutionRequest.builder()
+                .id("1").name("readFile").arguments("{\"path\":\"a").build();
+        ChatModel cut = new ChatModel() {
+            @Override
+            public ChatResponse chat(ChatRequest r) {
+                return ChatResponse.builder().aiMessage(AiMessage.from("Let me look", List.of(call)))
+                        .finishReason(dev.langchain4j.model.output.FinishReason.LENGTH).build();
+            }
+        };
+        ChatRequest request = ChatRequest.builder().messages(UserMessage.from("a")).build();
+
+        AiMessage reply = new ContextFittingChatModel(cut, 16_384).chat(request).aiMessage();
+
+        assertEquals("Let me look", reply.text());
+        assertFalse(reply.hasToolExecutionRequests());
+    }
+
+    @Test
+    void anEmptyReplyIsAskedAgainAndOneThatStaysEmptyIsSaidSoAndEmptyOnesInTheHistoryAreLeftOut() {
+        List<ChatRequest> received = new ArrayList<>();
+        int[] empties = {1}; // the first answer is empty, the next ones are not
+        ChatModel flaky = new ChatModel() {
+            @Override
+            public ChatResponse chat(ChatRequest request) {
+                received.add(request);
+                return ChatResponse.builder().aiMessage(empties[0]-- > 0 ? AiMessage.from("") : AiMessage.from("fine")).build();
+            }
+        };
+        ChatRequest request = ChatRequest.builder().messages(UserMessage.from("a"), AiMessage.from(""), UserMessage.from("b")).build();
+
+        ChatResponse response = new ContextFittingChatModel(flaky, 16_384).chat(request);
+
+        assertEquals("fine", response.aiMessage().text());
+        assertEquals(2, received.size(), "asked again once");
+        assertEquals(2, received.get(0).messages().size(), "the empty reply of an earlier turn is not sent");
+
+        ChatModel dead = new ChatModel() {
+            @Override
+            public ChatResponse chat(ChatRequest r) {
+                return ChatResponse.builder().aiMessage(AiMessage.from("")).build();
+            }
+        };
+        assertEquals(ContextFittingChatModel.EMPTY_REPLY, new ContextFittingChatModel(dead, 16_384).chat(request).aiMessage().text());
+    }
+
+    @Test
     void smallRequestsPassUnchanged() {
         FakeServer server = new FakeServer(1_000_000, 3);
         ChatRequest request = ChatRequest.builder().messages(UserMessage.from("hi")).build();
         new ContextFittingChatModel(server, 16_384).chat(request);
         assertSame(request, server.received.get(0));
+    }
+
+    @Test
+    void shorteningIsTheSameOnEveryCallSoTheServerCacheStaysValid() {
+        // The same turn, one call later: one more tool round at the end. Every message the first request
+        // already had must be sent exactly as before (a changed old message makes the server re-read all)
+        FakeServer server = new FakeServer(1_000_000, 3);
+        ContextFittingChatModel model = new ContextFittingChatModel(server, 16_384);
+        List<ChatMessage> first = turnWithTwoBigReads();
+        ToolExecutionRequest read3 = ToolExecutionRequest.builder().id("r3").name("readFile").arguments("{}").build();
+        List<ChatMessage> second = new ArrayList<>(first);
+        second.add(AiMessage.from(List.of(read3)));
+        second.add(ToolExecutionResultMessage.from(read3, "C".repeat(10_000)));
+
+        model.chat(ChatRequest.builder().messages(first).build());
+        model.chat(ChatRequest.builder().messages(second).build());
+
+        List<ChatMessage> sentFirst = server.received.get(0).messages();
+        List<ChatMessage> sentSecond = server.received.get(1).messages();
+        assertEquals(sentFirst, sentSecond.subList(0, sentFirst.size()));
+        assertTrue(((ToolExecutionResultMessage) sentFirst.get(3)).text().length() < 2_200, "cut to the fixed size");
     }
 
     @Test
@@ -90,8 +159,9 @@ class ContextFittingChatModelTest {
 
     @Test
     void retriesOnceWithTheServersTokenCount() {
-        // The server counts 2 characters per token, so the first (3 chars/token) estimate is too big
-        FakeServer server = new FakeServer(16_384 * 2, 2);
+        // The server counts 2 characters per token and has less room than configured, so the first
+        // (3 chars/token) fit is still too big for it: the error's token count drives a second, tighter fit
+        FakeServer server = new FakeServer(20_000, 2);
         ChatResponse response = new ContextFittingChatModel(server, 16_384)
                 .chat(ChatRequest.builder().messages(turnWithTwoBigReads()).build());
 

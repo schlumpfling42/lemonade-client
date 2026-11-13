@@ -64,7 +64,7 @@ public final class SkillLoader {
     }
 
     /** For tests: built-in skill JSON by name ({@code null} when there is none) instead of the resources. */
-    SkillLoader(Path userDir, List<String> builtInNames, SkillValidator validator, Function<String, String> builtInSource) {
+    public SkillLoader(Path userDir, List<String> builtInNames, SkillValidator validator, Function<String, String> builtInSource) {
         this.userDir = userDir;
         this.builtInNames = List.copyOf(builtInNames);
         this.validator = validator;

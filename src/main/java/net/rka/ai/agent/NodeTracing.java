@@ -28,6 +28,9 @@ import org.bsc.langgraph4j.state.AgentState;
  * The wrapper is applied to every node by the generated {@code *GraphDefinition} classes, because the
  * graph classes declare a {@code @NodeWrapper} method that calls {@link #wrap}.
  *
+ * <p>
+ * It also runs the {@link LoopWatch} on each node's result, since it is the one place around every node.
+ *
  * <h2>Not implemented yet</h2>
  * <ul>
  *   <li>Recording the node's state changes (input/output messages) as span attributes, so each step's
@@ -56,6 +59,8 @@ public final class NodeTracing {
     /** Returns a node action that does the same as {@code action}, inside a span called {@code name}. */
     public <S extends AgentState> NodeActionWithConfig<S> wrap(String name, NodeActionWithConfig<S> action) {
         return (state, config) -> {
+            // A stopped turn starts no more nodes: the job does not go on in the background after the user pressed Stop
+            if (live.cancelled()) throw new java.util.concurrent.CancellationException("stopped by the user");
             live.enter(name); // e.g. the plan step's JSON is shown as progress, not as text
             // The run's root span, passed through the config; fall back to the thread's context (e.g. in tests)
             Context parent = config.metadata(TRACE_CONTEXT)
@@ -66,12 +71,15 @@ public final class NodeTracing {
                     .setAttribute("langsmith.span.kind", "chain")
                     .startSpan();
             // While the node runs, its span is current, so the model call / tool spans nest under it
+            live.started(Thread.currentThread());
             try (Scope ignored = span.makeCurrent()) {
-                return action.apply(state, config);
+                // the same result again and again is a loop, whatever the node is (see LoopWatch)
+                return LoopWatch.check(name, state, action.apply(state, config));
             } catch (Exception e) {
                 span.recordException(e); // the error shows up on the step in LangSmith
                 throw e;
             } finally {
+                live.finished(Thread.currentThread());
                 span.end();
             }
         };

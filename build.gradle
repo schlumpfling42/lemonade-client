@@ -45,6 +45,9 @@ dependencies {
     // Graph annotations, checked at compile time; the processor generates <Graph>Definition classes
     implementation project(':graph-annotations')
     annotationProcessor project(':graph-processor')
+    // The editor's own compiler (VS Code) does not run the annotation processor, so it can't see the generated
+    // *GraphDefinition classes; it finds them in the classes Gradle built. Gradle itself compiles the sources.
+    compileOnly files(layout.buildDirectory.dir('classes/java/main'))
 
     // LangChain4j: OpenAI-compatible client (Lemonade exposes an OpenAI API)
     implementation 'dev.langchain4j:langchain4j:1.22.0'
@@ -59,6 +62,7 @@ dependencies {
     implementation 'io.opentelemetry:opentelemetry-sdk'
     implementation 'io.opentelemetry:opentelemetry-exporter-otlp'
     implementation 'com.fasterxml.jackson.core:jackson-databind:2.22.1' // local JSONL trace files
+    implementation 'io.github.java-diff-utils:java-diff-utils:4.12' // the coding job's design review sees diffs
 
     // Markdown in the chat window's assistant messages (CommonMark + GitHub tables)
     implementation 'org.commonmark:commonmark:0.28.0'
@@ -68,7 +72,7 @@ dependencies {
     implementation 'org.jsoup:jsoup:1.18.3'
 
     // JavaFX UI
-    ['base', 'graphics', 'controls'].each { module ->
+    ['base', 'graphics', 'controls', 'swing'].each { module ->
         implementation "org.openjfx:javafx-${module}:${javafxVersion}:${javafxPlatform}"
     }
     // RichTextArea (incubator): read-only rich text with selection and copy, used for chat bubbles
@@ -101,6 +105,55 @@ tasks.register('runCli', JavaExec) {
     mainClass = 'net.rka.ai.cli.Main'
     javaLauncher = javaToolchains.launcherFor(java.toolchain)
     standardInput = System.in // for approving terminal/SSH commands
+}
+
+// `./gradlew runManual` opens the chat with a second window that holds every call of the model: the request before it is sent, the answer before it is used
+tasks.register('runManual', JavaExec) {
+    group = 'application'
+    description = 'Runs the chat window with manual control of every request to and answer from the model.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'net.rka.ai.ManualLauncher'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    jvmArgs '--enable-native-access=ALL-UNNAMED'
+}
+
+// `./gradlew runEval --args="--only add-method"` runs the evaluation cases in evals/cases against the real agent and model (see README)
+tasks.register('runEval', JavaExec) {
+    group = 'verification'
+    description = 'Runs the evaluation cases against the real agent and model; the report is in evals/results.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'net.rka.ai.eval.EvalMain'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    jvmArgs '--enable-native-access=ALL-UNNAMED'
+}
+
+// `./gradlew runRouting --args="--run name"` runs the cases of evals/routing against the old question and the analysis (see docs/graph-redesign.md)
+tasks.register('runRouting', JavaExec) {
+    group = 'verification'
+    description = 'Runs the routing cases with the model: what the old triage and the new analysis decide.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'net.rka.ai.eval.RoutingEval'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    jvmArgs '--enable-native-access=ALL-UNNAMED'
+}
+
+// `./gradlew roundTripJava --args="src/main/java/some/folder"` reads Java files into the model and writes them as *_output.java
+tasks.register('roundTripJava', JavaExec) {
+    group = 'application'
+    description = 'Reads Java files into the JavaClass model and writes them again as Name_output.java.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'net.rka.ai.tools.code.java.JavaRoundTrip'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+}
+
+// `./gradlew renderDiagram` renders a sample skill's node graph to diagram_example.png
+tasks.register('renderDiagram', JavaExec) {
+    group = 'application'
+    description = 'Renders a sample skill graph with DiagramView and writes diagram_example.png.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'net.rka.ai.ui.DiagramExample'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    jvmArgs '--enable-native-access=ALL-UNNAMED'
 }
 
 // Keep method parameter names so LangChain4j can expose them to the LLM as tool argument names

@@ -36,8 +36,8 @@ public record Progress(String phase, int step, int steps, String detail) {
          * A node added a message: a reply of the model (its text, thinking and tool calls) or a tool
          * result, right when it happens instead of at the end of the turn.
          *
-         * @param codingJob true for a coding job's own transcript (its investigation, plan drafts and
-         *                  tool calls), which is not part of the saved conversation
+         * @param codingJob true for a coding job's own messages (a job keeps none any more: it answers in data),
+         *                  which are not part of the saved conversation
          */
         default void onMessage(dev.langchain4j.data.message.ChatMessage message, boolean codingJob) {
         }

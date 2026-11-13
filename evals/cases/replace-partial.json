@@ -1,0 +1,15 @@
+{
+  "id": "replace-partial",
+  "description": "Change one branch of a longer method and leave the rest of it alone",
+  "fixture": "shop",
+  "prompt": "In Order.total, premium customers should get 15 percent off instead of 10. Change nothing else.",
+  "expectCodingJob": true,
+  "checks": [
+    { "type": "fileContains", "path": "src/shop/Order.java", "regex": "sum\\s*\\*\\s*85\\s*/\\s*100" },
+    { "type": "fileContains", "path": "src/shop/Order.java", "text": "sum = sum * 95 / 100;" },
+    { "type": "fileNotContains", "path": "src/shop/Order.java", "regex": "sum\\s*\\*\\s*90\\s*/\\s*100" },
+    { "type": "fileContains", "path": "src/shop/Order.java", "text": "public int count()" },
+    { "type": "command", "command": "javac -d out src/shop/*.java && java -cp out shop.Main", "outputContains": "total 1530" },
+    { "type": "fileUnchanged", "path": "src/shop/Main.java" }
+  ]
+}

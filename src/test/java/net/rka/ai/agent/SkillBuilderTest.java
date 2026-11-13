@@ -126,7 +126,7 @@ class SkillBuilderTest {
     private Agent newAgent(List<String> builtIns) throws Exception {
         EnvironmentInfo environment = new EnvironmentInfo(dir.resolve("environment.json"),
                 command -> "exit code: 0\n--- stdout ---\nv1 of " + command, Clock.systemUTC());
-        ToolRegistry tools = ToolRegistry.of(new FileTools(), new TerminalTools(), new CodingTools(), new SkillTools());
+        ToolRegistry tools = ToolRegistry.of(new FileTools(), new net.rka.ai.tools.OutlineTools(), new net.rka.ai.tools.JavaTools(), new TerminalTools(), new CodingTools(), new SkillTools());
         SkillLoader loader = new SkillLoader(skillsDir, builtIns,
                 new SkillValidator(Agent.kinds(new CodingGraph.Setup(environment, 600)), tools));
         return new Agent("test", "scripted", model, Tracing.off(), tools, approver, loader, new LiveChannel());
@@ -310,12 +310,12 @@ class SkillBuilderTest {
         assertTrue(request(1).contains("\"coding.planApproval\""), "the built-in's file is the starting point");
         // ... with the coding kinds, their outcomes and limits, the coding maxSteps cap and the pinned tool
         String first = request(1);
-        for (String expected : List.of("## Coding kinds", "coding.verify", "passed, fix, failing", "maxStepTurns",
+        for (String expected : List.of("## Coding kinds", "coding.verify", "passed, fix, failing", "maxEditAttempts",
                 "maxVerifyAttempts", "1 to 1000", "tool is pinned")) {
             assertTrue(first.contains(expected), expected + " in " + first);
         }
         SkillDraft draft = approver.drafts.getFirst();
-        assertTrue(draft.toMarkdown().contains("**Limits:** maxSteps 600 · maxToolRounds 8"), draft.toMarkdown());
+        assertTrue(draft.toMarkdown().contains("**Limits:** maxSteps 300 · maxToolRounds 12"), draft.toMarkdown());
         assertTrue(draft.toMarkdown().contains("maxVerifyAttempts 3"), draft.toMarkdown());
         assertTrue(draft.replaces());
         assertTrue(draft.replacesBuiltIn());

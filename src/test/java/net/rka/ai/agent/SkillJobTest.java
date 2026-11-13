@@ -122,7 +122,7 @@ class SkillJobTest {
         skillsDir = Files.createDirectories(folder.resolve("chat").resolve("skills"));
         model = new ScriptedModel();
         approver = new SkillApprover();
-        tools = ToolRegistry.of(new FileTools(), new TerminalTools(), new CodingTools(), new CodingGraphTest.FakeWebTools());
+        tools = ToolRegistry.of(new FileTools(), new net.rka.ai.tools.OutlineTools(), new net.rka.ai.tools.JavaTools(), new TerminalTools(), new CodingTools(), new CodingGraphTest.FakeWebTools());
         agent = newAgent();
     }
 
@@ -204,10 +204,10 @@ class SkillJobTest {
             coding = (ObjectNode) json.readTree(in);
         }
         for (JsonNode node : coding.withArray("nodes")) {
-            if ("report".equals(node.path("id").asText())) {
+            if ("answer".equals(node.path("id").asText())) {
                 ObjectNode report = (ObjectNode) node;
                 report.removeAll();
-                report.put("id", "report");
+                report.put("id", "answer");
                 report.put("kind", "brittle");
             }
         }
@@ -218,7 +218,7 @@ class SkillJobTest {
 
         assertEquals(List.of("coding"), agent.skillStatus().skills().stream().map(SkillFile::name).toList());
         SkillFile used = agent.skillStatus().skills().getFirst();
-        assertTrue(used.nodes().stream().anyMatch(n -> n.id().equals("report") && n.kind().equals(CodingKinds.REPORT)),
+        assertTrue(used.nodes().stream().anyMatch(n -> n.id().equals("answer") && n.kind().equals(CodingKinds.ANSWER)),
                 "the built-in coding skill, not the user's file, is used");
         List<String> errors = agent.skillStatus().errors().get("coding.json");
         assertTrue(errors != null && errors.stream().anyMatch(e -> e.contains("can't be added to the agent graph")
@@ -353,6 +353,32 @@ class SkillJobTest {
         assertFalse(isError(answer));
         assertEquals(FINAL, ((AiMessage) produced.get(2)).text());
         assertTrue(model.answers.isEmpty());
+    }
+
+    @Test
+    void aModelNodeCanLimitItsOwnReplyAndAnInvalidLimitIsReported() throws Exception {
+        skill("brief", """
+                { "name": "brief", "description": "%s",
+                  "inputs": [ { "name": "who", "description": "the name to greet", "required": true } ],
+                  "start": "hello",
+                  "nodes": [
+                    { "id": "hello", "kind": "model", "prompt": "Greet {{input.who}}.", "maxTokens": 300, "output": "greeting", "next": "done" },
+                    { "id": "done", "kind": "finish", "result": "{{greeting}}" } ] }
+                """.formatted(DESCRIPTION));
+        agent = newAgent();
+        answers(AiMessage.from(List.of(call("s1", "skill_brief", "{\"who\":\"Bob\"}"))));
+        answers("Hi.", FINAL);
+
+        run("greet Bob");
+
+        assertEquals(300, model.requests.get(1).maxOutputTokens());
+        assertEquals(null, model.requests.getFirst().maxOutputTokens(), "the agent's own requests have no limit of the skill");
+        skill("broken", """
+                { "name": "broken", "description": "%s", "inputs": [], "start": "hello",
+                  "nodes": [ { "id": "hello", "kind": "model", "prompt": "Hi.", "maxTokens": 10, "next": "done" },
+                             { "id": "done", "kind": "finish", "result": "x" } ] }
+                """.formatted(DESCRIPTION));
+        assertTrue(newAgent().skillStatus().errors().toString().contains("maxTokens"), String.valueOf(newAgent().skillStatus()));
     }
 
     @Test
@@ -520,11 +546,11 @@ class SkillJobTest {
         assertTrue(offered(model.requests.getFirst()).containsAll(List.of("skill_greet", "skill_reader")));
         assertEquals(List.of("readFile"), offered(model.requests.get(1)));
 
-        // Inside a coding job: no skill tools in any request of the job
+        // Inside a coding job: no tool at all in any request of the job (the model only writes text there)
         model.requests.clear();
         answers(AiMessage.from(List.of(call("job1", CodingGraph.START_TOOL, "{\"goal\":\"look\"}"))));
-        answers("The folder is empty.", "{\"summary\":\"Look\",\"steps\":[{\"description\":\"Look around\"}]}",
-                "{\"summary\":\"Look\",\"steps\":[{\"description\":\"Look around\"}]}", "Looked around.", FINAL);
+        answers("{\"summary\":\"Note\",\"changes\":[{\"file\":\"note.txt\",\"action\":\"create\",\"intent\":\"a note\"}]}",
+                "```\nhello\n```", "Nothing was changed because the build could not run.", FINAL);
         approver.plans.add(new PlanDecision(PlanDecision.Kind.APPROVE, ""));
         run("look around");
         List<ChatRequest> job = model.requests.subList(1, model.requests.size() - 1);
@@ -532,7 +558,7 @@ class SkillJobTest {
         for (ChatRequest request : job) {
             assertTrue(offered(request).stream().noneMatch(name -> name.startsWith("skill_")), offered(request).toString());
         }
-        assertTrue(job.stream().anyMatch(request -> !offered(request).isEmpty())); // the job did offer tools
+        assertTrue(job.stream().allMatch(request -> offered(request).isEmpty()), "a job offers the model no tool");
     }
 
     @Test

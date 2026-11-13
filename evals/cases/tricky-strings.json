@@ -1,0 +1,15 @@
+{
+  "id": "tricky-strings",
+  "description": "Edit a method whose strings, char and text block look like code",
+  "fixture": "strings",
+  "prompt": "In Text.banner, change the word Welcome in the text block to Hello. Change nothing else.",
+  "expectCodingJob": true,
+  "checks": [
+    { "type": "command", "command": "javac -d out src/*.java && java -cp out Main", "outputContains": "Hello to {the} // show" },
+    { "type": "fileContains", "path": "src/Text.java", "text": "String open = \"{ // not a comment }\";" },
+    { "type": "fileContains", "path": "src/Text.java", "text": "char brace = '}';" },
+    { "type": "fileContains", "path": "src/Text.java", "text": "/* still text */" },
+    { "type": "fileContains", "path": "src/Text.java", "text": "public static int length()" },
+    { "type": "fileNotContains", "path": "src/Text.java", "text": "Welcome" }
+  ]
+}

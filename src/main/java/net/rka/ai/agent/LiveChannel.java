@@ -21,6 +21,35 @@ import java.util.Map;
  */
 final class LiveChannel {
 
+    // --- Stopping a turn: the graph runs its nodes on threads of its own, which interrupting the caller does not reach ---
+    private volatile boolean cancelled;
+    private final java.util.Set<Thread> running = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /** A new turn starts: nothing is cancelled. */
+    void begin() {
+        cancelled = false;
+    }
+
+    /** The user stopped the turn: no node starts any more, and the nodes that run are interrupted (a model request is cancelled, a command killed). */
+    void cancel() {
+        cancelled = true;
+        running.forEach(Thread::interrupt);
+    }
+
+    boolean cancelled() {
+        return cancelled;
+    }
+
+    void started(Thread node) {
+        running.add(node);
+    }
+
+    void finished(Thread node) {
+        running.remove(node);
+        if (cancelled) Thread.interrupted(); // the interrupt was ours: the pool thread must not take it to its next task
+    }
+
+
     private volatile Progress.ProgressListener listener = Progress.NONE;
     // The graph node whose model call is streaming now ("agent", "memory", "skill/coding/plan", ...), set by
     // NodeTracing when a node starts; it decides what of the stream is shown (see hiddenWork)
@@ -30,6 +59,11 @@ final class LiveChannel {
     // ("skill/<name>/<id>") → their label;
     // set by Agent at the start of a turn from the skills that turn runs with
     private volatile Map<String, String> skillWork = Map.of();
+
+    /** The graph step running now (its tracing name), e.g. for the agent log. */
+    String node() {
+        return node;
+    }
 
     /** Called by {@link NodeTracing} when a node starts. */
     void enter(String node) {
@@ -47,6 +81,7 @@ final class LiveChannel {
     static String hiddenWork(String node) {
         return switch (node) {
             case "memory" -> "Updating memory";
+            case "triage", "analyze" -> "Deciding how to handle this";
             case AgentGraph.SKILL_BUILDER + "/draft" -> "Drafting the skill";
             default -> null;
         };
@@ -64,8 +99,10 @@ final class LiveChannel {
      */
     static String hiddenWorkOfKind(String kind) {
         return switch (kind) {
+            case CodingKinds.PICK_FILES -> "Choosing files";
             case CodingKinds.PLAN -> "Writing the plan";
-            case CodingKinds.REVIEW -> "Reviewing the plan";
+            case CodingKinds.EDIT -> "Writing code";
+            case CodingKinds.FIX -> "Fixing code";
             case CodingKinds.DESIGN_REVIEW -> "Reviewing the design";
             default -> null;
         };
@@ -95,7 +132,7 @@ final class LiveChannel {
     }
 
     void thinking(String delta) {
-        if ("memory".equals(node)) return; // the summarizer's thinking isn't about your question
+        if ("memory".equals(node) || "triage".equals(node)) return; // the summarizer's and the triage's thinking isn't about your question
         try {
             listener.onPartialThinking(delta);
         } catch (RuntimeException ignored) {
@@ -119,6 +156,13 @@ final class LiveChannel {
 
     void toolCall(int index, String toolName, String argumentsDelta) {
         try {
+            // The decision of a node with hidden work (the analysis calls route) is not shown as a tool: it is progress, like its text
+            String work = work(node);
+            if (work != null) {
+                workChars += argumentsDelta.length();
+                listener.onPartialWork(work, workChars);
+                return;
+            }
             listener.onPartialToolCall(index, toolName, argumentsDelta);
         } catch (RuntimeException ignored) {
             // display only

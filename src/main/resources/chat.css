@@ -161,6 +161,10 @@
     -fx-text-fill: -md-on-surface-variant;
 }
 
+.button.folder-button.health-ok { -fx-text-fill: #2e7d32; }
+.button.folder-button.health-watch { -fx-text-fill: #b26a00; }
+.button.folder-button.health-drifting { -fx-text-fill: #c62828; -fx-font-weight: bold; }
+
 .button.folder-button:hover {
     -fx-background-color: -md-surface-container-low;
     -fx-effect: null;
@@ -187,22 +191,46 @@
     -fx-padding: 0;
 }
 
-.conversation-list .list-cell {
+.conversation-list .tree-cell {
     -fx-background-color: transparent;
-    -fx-padding: 10 16 10 16;
+    -fx-padding: 8 8 8 8;
     -fx-background-radius: 28;
     -fx-background-insets: 1 0 1 0;
 }
 
-.conversation-list .list-cell:hover {
+.conversation-list .tree-cell:hover {
     -fx-background-color: -md-surface-container;
 }
 
-.conversation-list .list-cell:selected {
+.conversation-list .tree-cell:selected {
     -fx-background-color: -md-secondary-container;
 }
 
-.conversation-list .list-cell:selected .conversation-title {
+.conversation-folder {
+    -fx-font-weight: bold;
+    -fx-text-fill: -md-on-surface-variant;
+}
+
+.folder-menu {
+    -fx-background-color: transparent;
+    -fx-padding: 0 6 0 6;
+    -fx-text-fill: -md-on-surface-variant;
+}
+
+.folder-menu:hover {
+    -fx-background-color: -md-surface-container-high;
+}
+
+.folder-menu > .arrow-button {
+    -fx-padding: 0;
+    -fx-pref-width: 0;
+}
+
+.folder-menu > .arrow-button > .arrow {
+    -fx-padding: 0;
+}
+
+.conversation-list .tree-cell:selected .conversation-title {
     -fx-text-fill: -md-on-secondary-container;
     -fx-font-weight: bold;
 }
@@ -469,6 +497,30 @@
 }
 
 /* Tool calls: assist chips */
+/* One line for the call that runs now, and a pill with the number of calls that opens them all in the side panel */
+.tool-line {
+    -fx-font-family: "Monospaced";
+    -fx-font-size: 12px;
+    -fx-text-fill: -md-on-surface-variant;
+    -fx-text-overrun: ellipsis;
+    -fx-cursor: hand;
+}
+
+.hyperlink.tool-count {
+    -fx-font-size: 11px;
+    -fx-font-weight: bold;
+    -fx-text-fill: -md-primary;
+    -fx-padding: 2 10 2 10;
+    -fx-background-color: -md-surface-container;
+    -fx-background-radius: 10;
+    -fx-underline: false;
+    -fx-cursor: hand;
+}
+
+.hyperlink.tool-count:hover {
+    -fx-background-color: -md-surface-container-low;
+}
+
 .hyperlink.tool-link {
     -fx-font-family: "Monospaced";
     -fx-font-size: 12px;

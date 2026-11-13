@@ -23,16 +23,16 @@ import javafx.scene.text.Font;
 import javafx.scene.text.Text;
 import jfx.incubator.scene.control.richtext.RichTextArea;
 import javafx.scene.Scene;
-import javafx.scene.input.Clipboard;
-import javafx.scene.input.ClipboardContent;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
 import javafx.scene.control.ButtonType;
 import javafx.scene.control.ContextMenu;
 import javafx.scene.control.Hyperlink;
 import javafx.scene.control.Label;
-import javafx.scene.control.ListCell;
-import javafx.scene.control.ListView;
+import javafx.scene.control.MenuButton;
+import javafx.scene.control.TreeCell;
+import javafx.scene.control.TreeItem;
+import javafx.scene.control.TreeView;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.ProgressIndicator;
 import javafx.scene.control.ScrollPane;
@@ -50,6 +50,8 @@ import javafx.stage.DirectoryChooser;
 import javafx.stage.Stage;
 import net.rka.ai.agent.Agent;
 import net.rka.ai.agent.Approver;
+import net.rka.ai.agent.ContextReset;
+import net.rka.ai.agent.ConversationHealth;
 import net.rka.ai.agent.PlanReview;
 import net.rka.ai.agent.SkillDecision;
 import net.rka.ai.agent.SkillDraft;
@@ -75,6 +77,9 @@ import java.time.format.DateTimeFormatter;
 import java.time.format.FormatStyle;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.Set;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -111,7 +116,7 @@ import java.util.concurrent.Executors;
  * <h2>State</h2>
  * The open conversation is {@code history} (the messages), {@code threadId} (its id), its title and
  * {@code conversationSettings}. It's saved to the {@link ConversationStore} after every answer. The
- * sidebar is a {@link ListView} of {@link Summary} rows read from the store.
+ * sidebar is a {@link TreeView}: a row per trusted folder with its {@link Summary} rows read from the store below it.
  *
  * <h2>Not implemented yet</h2>
  * <ul>
@@ -122,7 +127,7 @@ import java.util.concurrent.Executors;
  *   <li>Dark mode (a second set of color roles in chat.css), font size setting, keyboard shortcuts
  *       (Ctrl+N new chat, Ctrl+K search conversations).</li>
  *   <li>Drag-and-drop files into the input, and image input for vision models.</li>
- *   <li>Remembering window size, sidebar width and the last open conversation.</li>
+ *   <li>Remembering the sidebar's width (the window's place and size, the open conversation and the unsent text are remembered: {@link UiState}).</li>
  * </ul>
  */
 public class ChatWindow extends Application {
@@ -134,6 +139,17 @@ public class ChatWindow extends Application {
         t.setDaemon(true);
         return t;
     });
+
+    // Manual mode (net.rka.ai.ManualLauncher sets chat.manual): every call to the model is held in the WireWindow for the person to read and change
+    private final WireGate wireGate = Boolean.getBoolean("chat.manual") ? new WireGate() : null;
+
+    // Where the person was (open conversation, unsent text, window place), written as it changes so a restart does not lose it
+    private final UiState ui = UiState.load(Settings.globalFile().resolveSibling("ui-state.json"));
+    private final javafx.animation.PauseTransition saveUiSoon = new javafx.animation.PauseTransition(javafx.util.Duration.millis(600));
+
+    // The thread that runs the turn in progress (null between turns) and whether the Stop button was pressed for it
+    private volatile Thread turnThread;
+    private volatile boolean stopRequested;
 
     private Agent agent;   // created in init(), shared by all conversations
     private Stage stage;   // the main window; owner of all dialogs
@@ -152,6 +168,7 @@ public class ChatWindow extends Application {
     private ConversationSummary conversationSummary = ConversationSummary.EMPTY;
     private List<FactBook.Fact> conversationFacts = List.of();
     private final Button memoryButton = new Button("✦ Memory");
+    private final Button healthButton = new Button("● Context"); // how fit the conversation is to work from; click for the reasons and a reset
     // Files attached to the next message, shown as removable chips above the input until it's sent
     private final List<Attachments.Attachment> pendingFiles = new ArrayList<>();
     private final HBox pendingChips = new HBox(6);
@@ -159,7 +176,10 @@ public class ChatWindow extends Application {
     private final Button folderButton = new Button();
     private final Button conversationSettingsButton = new Button("⚙ Conversation");
 
-    private final ListView<Summary> conversations = new ListView<>();
+    // The sidebar: a folder row per trusted folder (a Path), its saved conversations below it (Summary)
+    private final TreeView<Object> conversations = new TreeView<>();
+    private List<Summary> saved = List.of();                      // what the sidebar was built from, newest first
+    private final Set<String> collapsedFolders = new HashSet<>(); // folder rows the user closed: they stay closed on refresh
     private final VBox sidebar = new VBox(4);
     // True while the code itself changes the list selection, so the listener doesn't treat it as a click
     private boolean selectingProgrammatically;
@@ -223,7 +243,7 @@ public class ChatWindow extends Application {
             public SkillDecision reviewSkill(SkillDraft draft) {
                 return reviewSkillDraft(draft);
             }
-        });
+        }, wireGate);
     }
 
     /** Called by JavaFX on the FX thread to build and show the window. */
@@ -232,7 +252,7 @@ public class ChatWindow extends Application {
         this.stage = stage;
 
         // --- Header: menu button, title and status line, settings button ---
-        Label title = new Label("Lemonade Agent");
+        Label title = new Label(wireGate == null ? "Lemonade Agent" : "Lemonade Agent Â· manual control");
         title.getStyleClass().add("title"); // style classes connect nodes to rules in chat.css
         status.setText(agent.modelName() + " @ " + agent.baseUrl()
                 + "   ·   Tracing: " + agent.tracingDescription());
@@ -277,13 +297,16 @@ public class ChatWindow extends Application {
         HBox.setHgrow(input, Priority.ALWAYS); // the input takes all the width the button column leaves
 
         send.setDefaultButton(false); // Enter is handled above; a default button would also fire in dialogs
-        send.setOnAction(e -> sendMessage());
+        send.setOnAction(e -> { // while a turn runs the button is the Stop button
+            if (busy.isVisible()) stopTurn();
+            else sendMessage();
+        });
         send.getStyleClass().add("primary");
         busy.setPrefSize(24, 24);
         busy.setVisible(false); // shown by setBusy(true) while a turn runs
 
         VBox buttons = new VBox(8, send, busy);
-        buttons.setAlignment(Pos.TOP_CENTER);
+        buttons.setAlignment(Pos.CENTER_LEFT);
         send.setMaxWidth(Double.MAX_VALUE);
 
         // Small trusted-folder button under the input line; click to pick another folder
@@ -297,6 +320,8 @@ public class ChatWindow extends Application {
         memoryButton.getStyleClass().add("folder-button");
         memoryButton.setTooltip(new Tooltip("This conversation's memory: summary of older messages and remembered facts"));
         memoryButton.setOnAction(e -> editMemory());
+        healthButton.getStyleClass().add("folder-button");
+        healthButton.setOnAction(e -> showHealthDialog());
         // Attaching: the chip opens a file picker; files can also be dropped onto the input
         attachButton.getStyleClass().add("folder-button");
         attachButton.setTooltip(new Tooltip("Attach text files to your next message (or drop them on the input)"));
@@ -315,7 +340,7 @@ public class ChatWindow extends Application {
         pendingChips.managedProperty().bind(pendingChips.visibleProperty()); // takes no space when empty
         pendingChips.setVisible(false);
         VBox inputColumn = new VBox(4, pendingChips, input,
-                new HBox(6, attachButton, folderButton, conversationSettingsButton, memoryButton));
+                new HBox(6, attachButton, folderButton, conversationSettingsButton, memoryButton, healthButton));
         HBox.setHgrow(inputColumn, Priority.ALWAYS);
 
         HBox composer = new HBox(10, inputColumn, buttons);
@@ -325,15 +350,22 @@ public class ChatWindow extends Application {
         // BorderPane(center, top, right, bottom, left): two nested ones give the layout drawn in the class doc
         BorderPane chat = new BorderPane(split, null, null, composer, null);
         BorderPane root = new BorderPane(chat, header, null, null, sidebar);
-        Scene scene = new Scene(root, 1040, 680);
+        Scene scene = new Scene(root, ui.hasBounds() ? ui.width : 1040, ui.hasBounds() ? ui.height : 680);
         // The Material theme; loaded from the classpath (src/main/resources/chat.css)
         scene.getStylesheets().add(getClass().getResource("/chat.css").toExternalForm());
 
         stage.setTitle("Lemonade Agent");
         stage.setScene(scene);
+        restorePlace();
         stage.show();
+        if (wireGate != null) new WireWindow(wireGate, stage); // the window with every call of the model, held for the person
+        restoreSession();
+        watchPlace();
         input.requestFocus(); // ready to type
+
     }
+
+    
 
     /**
      * Sends the input as a new user message and runs one agent turn in the background.
@@ -343,6 +375,7 @@ public class ChatWindow extends Application {
         String typed = input.getText().strip();
         if ((typed.isEmpty() && pendingFiles.isEmpty()) || busy.isVisible()) return; // one turn at a time
         input.clear();
+        stopRequested = false;
         if (typed.isEmpty()) typed = "Please look at the attached file" + (pendingFiles.size() > 1 ? "s." : ".");
         // The model receives what you typed plus the attached files' text, all in one message
         String text = Attachments.compose(typed, pendingFiles);
@@ -365,6 +398,12 @@ public class ChatWindow extends Application {
         // The conversation's memory goes in with the turn and comes back updated
         ConversationSummary summary = conversationSummary;
         List<FactBook.Fact> facts = conversationFacts;
+        // The conversation is saved now, with the question: a restart during the turn must not lose it (it was saved only after the answer)
+        saveConversation(new Conversation(thread, title, Instant.now(), own, summary, facts, snapshot));
+        ui.lastConversation = thread;
+        ui.save();
+        // ... and again with every message the turn adds, so a closed app leaves the conversation as far as it got
+        List<ChatMessage> turnSoFar = new java.util.concurrent.CopyOnWriteArrayList<>();
         // Live output: the listener runs on the worker thread after each graph node; everything it
         // shows is queued onto the FX thread, in order, before the turn's onSucceeded/onFailed
         liveShown = 0;
@@ -378,6 +417,14 @@ public class ChatWindow extends Application {
             public void onMessage(ChatMessage message, boolean codingJob) {
                 // A finished reply replaces what was streamed of it
                 if (message instanceof AiMessage) streaming.clear();
+                turnSoFar.add(message);
+                try {
+                    List<ChatMessage> sofar = new ArrayList<>(snapshot);
+                    sofar.addAll(turnSoFar);
+                    store.save(new Conversation(thread, title, Instant.now(), own, summary, facts, sofar));
+                } catch (RuntimeException e) {
+                    // the save at the end of the turn reports a failing disk
+                }
                 Platform.runLater(() -> {
                     if (!thread.equals(threadId)) return; // another conversation is open now
                     render(message);        // part of the conversation: counted, not rendered again later
@@ -397,10 +444,13 @@ public class ChatWindow extends Application {
             }
 
             // Real-time pieces: gathered on this worker thread, drawn on the FX thread (see LiveReply)
-            @Override public void onPartialThinking(String delta) { streaming.thinking(delta); }
-            @Override public void onPartialText(String delta) { streaming.text(delta); }
-            @Override public void onPartialToolCall(int index, String name, String delta) { streaming.toolCall(index, name, delta); }
-            @Override public void onPartialWork(String label, int characters) { streaming.work(label, characters); }
+            // In manual mode what the model writes is shown in the WireWindow, and reaches the chat only when the person lets it through
+            @Override public void onPartialThinking(String delta) { if (wireGate != null) wireGate.live("thinking", delta); else streaming.thinking(delta); }
+            @Override public void onPartialText(String delta) { if (wireGate != null) wireGate.live("text", delta); else streaming.text(delta); }
+            @Override public void onPartialToolCall(int index, String name, String delta) {
+                if (wireGate != null) wireGate.live("tool call " + name, delta); else streaming.toolCall(index, name, delta);
+            }
+            @Override public void onPartialWork(String label, int characters) { if (wireGate == null) streaming.work(label, characters); }
             @Override public void onStepDone() { streaming.clear(); }
 
             @Override
@@ -419,7 +469,13 @@ public class ChatWindow extends Application {
         Task<Agent.Turn> task = new Task<>() {
             @Override
             protected Agent.Turn call() {
-                return agent.run(snapshot, thread, effective, summary, facts, live);
+                turnThread = Thread.currentThread();
+                try {
+                    return agent.run(snapshot, thread, effective, summary, facts, live);
+                } finally {
+                    turnThread = null;
+                    Thread.interrupted(); // a stop must not leave the worker thread interrupted for the next turn
+                }
             }
         };
         task.setOnSucceeded(e -> {
@@ -441,6 +497,7 @@ public class ChatWindow extends Application {
                 history.addAll(produced);        // keep our copy of the conversation in sync
                 // Most messages were shown live already; render only what wasn't (normally nothing)
                 produced.subList(Math.min(liveShown, produced.size()), produced.size()).forEach(this::render);
+                if (stopRequested) addBubble("Stopped", "You stopped it. What it did until then is kept above.", "assistant");
             }
             setBusy(false);
         });
@@ -449,7 +506,6 @@ public class ChatWindow extends Application {
             streaming.clear();
             // agent.run threw (Lemonade unreachable, timeout, ...): show the error instead of an answer
             Throwable error = task.getException();
-            Throwable cause = Agent.TurnFailedException.rootCause(error); // without the graph runner's wrappers
             if (error instanceof Agent.TurnFailedException failed) {
                 // The turn already ran tools (maybe changed files): keep the question and what it did, so the
                 // next turn knows; open calls come back answered with an error, which marks their pills failed
@@ -464,17 +520,33 @@ public class ChatWindow extends Application {
                     history.addAll(turn.messages());
                     List<ChatMessage> produced = turn.messages();
                     produced.subList(Math.min(liveShown, produced.size()), produced.size()).forEach(this::render);
-                    addBubble("Error", cause.getClass().getSimpleName() + ": " + cause.getMessage(), "error");
+                    showFailure(error);
                 }
             } else if (thread.equals(threadId)) {
                 history.remove(history.size() - 1); // nothing happened yet: drop the unanswered question
-                addBubble("Error", cause.getClass().getSimpleName() + ": " + cause.getMessage(), "error");
+                showFailure(error);
             }
             setBusy(false);
         });
         setBusy(true);       // spinner on, conversation switching locked
         worker.submit(task); // start the turn in the background; this method returns immediately
     }
+
+    /** The Stop button: interrupts the turn's thread; the model's stream is cancelled, a running command is stopped. */
+    private void stopTurn() {
+        stopRequested = true;
+        if (agent != null) agent.stop(); // the graph's own threads: a job must not go on in the background
+        Thread running = turnThread;
+        if (running != null) running.interrupt();
+    }
+
+    /** What a failed turn shows: a note when you stopped it, else the error. */
+    private void showFailure(Throwable error) {
+        if (stopRequested) addBubble("Stopped", "You stopped it. What it did until then is kept above.", "assistant");
+        else addBubble("Error", Agent.TurnFailedException.describe(error), "error");
+    }
+
+
 
     /**
      * Shows one message in the transcript. Used for new answers and when reopening a saved
@@ -499,12 +571,10 @@ public class ChatWindow extends Application {
             addBubble("You", user.hasSingleText() ? user.singleText() : String.valueOf(user.contents()), "user"); // splits off attachments
         } else if (message instanceof AiMessage ai) {
             Thought thought = Thought.of(ai);
-            // Thinking first (what the model considered), then its words, then the tool calls they announce
-            if (!thought.thinking().isBlank()) addNote(codingJob ? jobLabel + " · thinking" : "Thinking", thought.thinking());
-            if (!thought.text().isBlank()) {
-                if (codingJob) addNote(jobLabel, thought.text());
-                else addBubble("Assistant", thought.text(), "assistant");
-            }
+            // A job's steps are shown as an overview only: the progress card says the phase, one pill the tool calls. Its thinking and
+            // the notes it writes for itself are not shown (they are in the traces)
+            if (!codingJob && !thought.thinking().isBlank()) addNote("Thinking", thought.thinking());
+            if (!codingJob && !thought.text().isBlank()) addBubble("Assistant", thought.text(), "assistant");
             if (ai.hasToolExecutionRequests()) {
                 for (ToolExecutionRequest call : ai.toolExecutionRequests()) {
                     addToolLink(ids + call.id(), new ToolEntry(call.name(), call.arguments()));
@@ -548,15 +618,19 @@ public class ChatWindow extends Application {
      */
     private final class ToolPill {
         private final List<ToolEntry> calls = new ArrayList<>();
-        private final Hyperlink link = new Hyperlink();
+        private final Label line = new Label();                  // the call that runs now (or ran last), on one line
+        private final Hyperlink count = new Hyperlink();         // "7 calls": opens all of them in the side panel
         private final Label state = new Label("running");
-        private final HBox row = new HBox(6, link, state);
+        private final HBox row = new HBox(6, line, count, state);
 
         ToolPill() {
-            link.getStyleClass().add("tool-link");
-            link.setOnAction(e -> openToolPanel(calls, calls.getLast()));
-            // Bound, not set: the pill keeps following the window width (75% of the transcript)
-            link.maxWidthProperty().bind(scroll.widthProperty().multiply(0.75));
+            line.getStyleClass().add("tool-line");
+            line.setMinWidth(0);
+            line.setOnMouseClicked(e -> openToolPanel(calls, calls.getLast()));
+            count.getStyleClass().add("tool-count");
+            count.setOnAction(e -> openToolPanel(calls, calls.getLast()));
+            // Bound, not set: the line keeps following the window width (60% of the transcript)
+            line.maxWidthProperty().bind(scroll.widthProperty().multiply(0.6));
             state.getStyleClass().add("tool-state");
             row.setAlignment(Pos.CENTER_LEFT);
             messages.getChildren().add(row); // appended at the bottom of the transcript
@@ -572,8 +646,8 @@ public class ChatWindow extends Application {
         /** Redraws the text and badge from the calls' current state. */
         void refresh() {
             ToolEntry last = calls.getLast();
-            String latest = last.name() + "  " + summarize(last.arguments());
-            link.setText(calls.size() == 1 ? "⚙ " + latest : "⚙ " + calls.size() + " tool calls · " + latest);
+            line.setText("⚙ " + describe(last));
+            count.setText(calls.size() == 1 ? "1 call" : calls.size() + " calls");
             long failed = calls.stream().filter(ToolEntry::failed).count();
             ToolEntry running = calls.stream().filter(c -> !c.hasResult()).reduce((a, b) -> b).orElse(null);
             String text;
@@ -594,6 +668,30 @@ public class ChatWindow extends Application {
             // setAll replaces the classes, so the badge switches its color rule (done = green, failed = red)
             state.getStyleClass().setAll("label", "tool-state", kind);
         }
+    }
+
+    private static final com.fasterxml.jackson.databind.ObjectMapper JSON = new com.fasterxml.jackson.databind.ObjectMapper();
+
+    /**
+     * A call on one line: its name and what it works on (the file and section, the pattern, the command), not its raw arguments.
+     * The side panel has the full call and its output.
+     */
+    private static String describe(ToolEntry call) {
+        StringBuilder on = new StringBuilder();
+        try {
+            com.fasterxml.jackson.databind.JsonNode args = JSON.readTree(call.arguments());
+            String path = args.path("path").asText("");
+            if (!path.isEmpty()) on.append(path.substring(Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1));
+            for (String key : List.of("section", "pattern", "name", "command", "glob", "query", "url")) {
+                String value = args.path(key).asText("");
+                if (!value.isEmpty()) on.append(on.isEmpty() ? "" : " › ").append(value);
+            }
+        } catch (Exception e) {
+            // not JSON: the arguments as they are
+        }
+        String shown = on.isEmpty() ? summarize(call.arguments()) : on.toString();
+        shown = shown.replaceAll("\\s+", " ").strip();
+        return call.name() + (shown.isEmpty() ? "" : "  " + (shown.length() > 80 ? shown.substring(0, 79) + "…" : shown));
     }
 
     /** The arguments on one line, cut to 70 characters for the chip. */
@@ -822,8 +920,8 @@ public class ChatWindow extends Application {
                 messages.getChildren().add(box); // at the bottom; the height listener scrolls to it
             }
             // Thinking can get long: show its latest part, the way a terminal shows the last lines
-            thinkingLabel.setText(thought.isEmpty() ? "" : "Thinking… "
-                    + (thought.length() > 800 ? "…" + thought.substring(thought.length() - 800) : thought));
+            // One line: that it thinks, not what (the words go to the transcript only when the reply is finished)
+            thinkingLabel.setText(thought.isEmpty() ? "" : "Thinking… " + String.format("%,d", thought.length()) + " characters");
             textLabel.setText(said);
             callsLabel.setText(calls);
             box.getChildren().setAll(List.of(thinkingLabel, textLabel, callsLabel).stream()
@@ -1033,6 +1131,13 @@ public class ChatWindow extends Application {
         input.requestFocus();
     }
 
+    /** New chat whose trusted folder is {@code folder} (the folder menu in the sidebar). */
+    private void newConversationIn(Path folder) {
+        resetConversation();
+        conversationSettings = conversationSettings.withWorkFolder(folder);
+        showFolder();
+    }
+
     /** Empties the transcript and forgets its tool chips. */
     private void clearTranscript() {
         messages.getChildren().clear();
@@ -1044,7 +1149,7 @@ public class ChatWindow extends Application {
 
     // --- Conversations sidebar ---
 
-    /** The left drawer: New chat, a heading and the list of saved conversations (newest first). */
+    /** The left drawer: New chat, a heading and the saved conversations grouped by trusted folder (newest first). */
     private void buildSidebar() {
         newChat.setMaxWidth(Double.MAX_VALUE);
         newChat.getStyleClass().add("new-chat");
@@ -1053,13 +1158,19 @@ public class ChatWindow extends Application {
         Label heading = new Label("Conversations");
         heading.getStyleClass().add("sidebar-heading");
 
-        conversations.setPlaceholder(new Label("No saved conversations yet")); // shown when the list is empty
+        conversations.setShowRoot(false);
         conversations.getStyleClass().add("conversation-list");
-        // A cell factory decides how each row looks; ListView reuses cells while scrolling
-        conversations.setCellFactory(list -> new ConversationCell());
-        // Clicking a row selects it; opening happens in reaction to the selection change
+        // A cell factory decides how each row looks; the tree reuses cells while scrolling
+        conversations.setCellFactory(tree -> new ConversationCell());
+        // Clicking a conversation selects it; opening happens in reaction to the selection change. A folder row is a
+        // heading: the highlight goes back to the open conversation
         conversations.getSelectionModel().selectedItemProperty().addListener((obs, old, picked) -> {
-            if (!selectingProgrammatically && picked != null && !picked.id().equals(threadId)) open(picked);
+            if (selectingProgrammatically || picked == null) return;
+            if (picked.getValue() instanceof Summary summary) {
+                if (!summary.id().equals(threadId)) open(summary);
+            } else {
+                Platform.runLater(() -> selectInList(threadId));
+            }
         });
         VBox.setVgrow(conversations, Priority.ALWAYS); // the list takes the remaining height
 
@@ -1070,26 +1181,66 @@ public class ChatWindow extends Application {
         refreshList(); // read the conversations folder
     }
 
-    /** A sidebar row: title and last-updated time; right-click to rename or delete. */
-    private final class ConversationCell extends ListCell<Summary> {
+    /**
+     * A sidebar row. A folder: its name, a menu (new conversation in it, copy its path) and the same menu on right-click.
+     * A conversation: title and last-updated time; right-click to rename or delete.
+     */
+    private final class ConversationCell extends TreeCell<Object> {
         private static final DateTimeFormatter WHEN =
                 DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT).withZone(ZoneId.systemDefault());
 
         ConversationCell() {
-            // Don't ask for any width of our own: the row is exactly as wide as the list, so there's
+            // Don't ask for any width of our own: the row is exactly as wide as the tree, so there's
             // never a horizontal scrollbar (also not when the vertical one takes some width)
             setPrefWidth(0);
         }
 
-        /** Called by ListView whenever this cell is (re)used for another row, or for no row. */
+        /** Called whenever this cell is (re)used for another row, or for no row. */
         @Override
-        protected void updateItem(Summary item, boolean empty) {
+        protected void updateItem(Object item, boolean empty) {
             super.updateItem(item, empty);
+            setText(null);          // the rows show a node instead of the default text
+            setTooltip(null);
             if (empty || item == null) { // cells below the last row: clear them, or they show stale content
                 setGraphic(null);
                 setContextMenu(null);
                 return;
             }
+            if (item instanceof Path folder) {
+                folderRow(folder);
+            } else {
+                conversationRow((Summary) item);
+            }
+        }
+
+        private void folderRow(Path folder) {
+            Path name = folder.getFileName(); // null for a drive root
+            Label title = new Label("📁 " + (name != null ? name : folder));
+            title.getStyleClass().add("conversation-folder");
+            title.setMinWidth(0);
+            setTooltip(new Tooltip(folder.toString()));
+            MenuItem create = new MenuItem("New conversation here");
+            create.setOnAction(e -> newConversationIn(folder));
+            MenuItem copy = new MenuItem("Copy path");
+            copy.setOnAction(e -> {
+                javafx.scene.input.ClipboardContent content = new javafx.scene.input.ClipboardContent();
+                content.putString(folder.toString());
+                javafx.scene.input.Clipboard.getSystemClipboard().setContent(content);
+            });
+            MenuButton menu = new MenuButton("⋯", null, create, copy);
+            menu.getStyleClass().add("folder-menu");
+            menu.setTooltip(new Tooltip("New conversation in this folder"));
+            HBox.setHgrow(title, Priority.ALWAYS);
+            title.setMaxWidth(Double.MAX_VALUE);
+            HBox box = new HBox(4, title, menu);
+            box.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
+            setGraphic(box);
+            MenuItem createAgain = new MenuItem("New conversation here");
+            createAgain.setOnAction(e -> newConversationIn(folder));
+            setContextMenu(new ContextMenu(createAgain));
+        }
+
+        private void conversationRow(Summary item) {
             Label title = new Label(item.title());
             title.getStyleClass().add("conversation-title");
             Label when = new Label(WHEN.format(item.updated()));
@@ -1097,14 +1248,25 @@ public class ChatWindow extends Application {
             VBox box = new VBox(2, title, when);
             box.setMaxWidth(Double.MAX_VALUE);
             title.setMinWidth(0);   // may shrink below its text width: long titles end in "…"
-            setGraphic(box);        // the cell shows our node...
-            setText(null);          // ...instead of its default text
 
-            // Right-click menu per row
+            // Menu button with Rename and Delete actions
             MenuItem rename = new MenuItem("Rename…");
             rename.setOnAction(e -> rename(item));
             MenuItem delete = new MenuItem("Delete");
             delete.setOnAction(e -> delete(item));
+            MenuButton menuButton = new MenuButton("⋯", null, rename, delete);
+            menuButton.getStyleClass().add("folder-menu");
+
+            HBox hbox = new HBox(5, box, menuButton);
+            hbox.setMaxWidth(Double.MAX_VALUE);
+            setGraphic(hbox);
+
+            rename = new MenuItem("Rename…");
+            rename.setOnAction(e -> rename(item));
+            delete = new MenuItem("Delete");
+            delete.setOnAction(e -> delete(item));
+
+            // Right-click menu per row
             setContextMenu(new ContextMenu(rename, delete));
         }
     }
@@ -1120,8 +1282,13 @@ public class ChatWindow extends Application {
             return;
         }
         // Make it the open conversation: the next message continues it (same id = same file and thread)
-        history = new ArrayList<>(conversation.messages());
+        // A conversation saved in the middle of a turn can end with a call that has no result: the app was closed during it
+        List<ChatMessage> repaired = net.rka.ai.agent.OpenCalls.closed(conversation.messages(), "the app was closed before this call finished.");
+        boolean cutOff = repaired != conversation.messages() || (!repaired.isEmpty() && repaired.get(repaired.size() - 1) instanceof UserMessage);
+        history = new ArrayList<>(repaired);
         threadId = conversation.id();
+        ui.lastConversation = threadId;
+        ui.save();
         conversationTitle = conversation.title();
         conversationSettings = conversation.settings();
         conversationSummary = conversation.summary();
@@ -1129,6 +1296,9 @@ public class ChatWindow extends Application {
         showFolder();
         clearTranscript();
         history.forEach(this::render); // rebuild bubbles and tool chips from the saved messages
+        if (cutOff) {
+            addBubble("Context", "The app was closed while this conversation was working: the last request has no answer. Send it again, or say \"continue\".", "assistant");
+        }
         input.requestFocus();
     }
 
@@ -1188,7 +1358,7 @@ public class ChatWindow extends Application {
             conversationFacts = facts;
             showFolder(); // update the fact count on the chip
             // Saved conversations get the change right away; a new chat saves it with its first answer
-            if (conversations.getItems().stream().anyMatch(s -> s.id().equals(threadId))) {
+            if (saved.stream().anyMatch(s -> s.id().equals(threadId))) {
                 try {
                     store.save(store.load(threadId).withFacts(facts));
                 } catch (RuntimeException e) {
@@ -1249,7 +1419,7 @@ public class ChatWindow extends Application {
         conversationSettings = updated;
         showFolder();
         // Only conversations already in the list have a file; a new chat saves its settings with the first answer
-        if (conversations.getItems().stream().anyMatch(s -> s.id().equals(threadId))) {
+        if (saved.stream().anyMatch(s -> s.id().equals(threadId))) {
             try {
                 store.save(store.load(threadId).withSettings(updated)); // load, replace settings, save
             } catch (RuntimeException e) {
@@ -1270,6 +1440,53 @@ public class ChatWindow extends Application {
         conversationSettingsButton.setText(extra == 0 ? "⚙ Conversation" : "⚙ Conversation · " + extra + " trusted");
         int facts = conversationFacts.size();
         memoryButton.setText(facts == 0 ? "✦ Memory" : "✦ Memory · " + facts + (facts == 1 ? " fact" : " facts"));
+        showHealth();
+    }
+
+    /** The conversation's health on its chip: green, amber or red by what went wrong lately (see {@link ConversationHealth}). */
+    private void showHealth() {
+        ConversationHealth health = ConversationHealth.of(history, conversationSummary, Agent.contextWindowTokens());
+        healthButton.getStyleClass().removeAll("health-ok", "health-watch", "health-drifting");
+        healthButton.getStyleClass().add("health-" + health.level().name().toLowerCase());
+        healthButton.setText(switch (health.level()) {
+            case OK -> "● Context";
+            case WATCH -> "● Context · watch";
+            case DRIFTING -> "● Context · drifting";
+        });
+        healthButton.setTooltip(new Tooltip(health.reasons().isEmpty() ? "The conversation looks fine. Click to see how its context is built."
+                : String.join("\n", health.reasons()) + "\nClick to see what you can do."));
+    }
+
+    /** The chip's window: what the level is based on, and the reset that rebuilds the model's context from the record. */
+    private void showHealthDialog() {
+        ConversationHealth health = ConversationHealth.of(history, conversationSummary, Agent.contextWindowTokens());
+        javafx.scene.control.ButtonType reset = new javafx.scene.control.ButtonType("Reset context", javafx.scene.control.ButtonBar.ButtonData.OK_DONE);
+        javafx.scene.control.Alert alert = new javafx.scene.control.Alert(javafx.scene.control.Alert.AlertType.NONE, "", reset, javafx.scene.control.ButtonType.CLOSE);
+        alert.initOwner(stage);
+        alert.setTitle("Conversation context");
+        alert.setHeaderText(switch (health.level()) {
+            case OK -> "The conversation looks fine";
+            case WATCH -> "Something went wrong lately: worth watching";
+            case DRIFTING -> "The conversation is drifting: a reset is advised";
+        });
+        alert.setContentText((health.reasons().isEmpty() ? "Nothing went wrong lately.\n" : "- " + String.join("\n- ", health.reasons()) + "\n")
+                + "\nReset context rebuilds what the model knows from your own messages, the task and how the coding jobs ended: nothing the assistant"
+                + " wrote is kept. The transcript on screen stays as it is.");
+        if (alert.showAndWait().filter(reset::equals).isPresent()) resetContext();
+        input.requestFocus();
+    }
+
+    private void resetContext() {
+        conversationSummary = ContextReset.summary(history, conversationFacts);
+        if (saved.stream().anyMatch(s -> s.id().equals(threadId))) {
+            try {
+                store.save(store.load(threadId).withSummary(conversationSummary));
+            } catch (RuntimeException e) {
+                showError("Could not save the conversation's context", e);
+            }
+        }
+        showHealth();
+        addBubble("Context", "The model's context was rebuilt from your messages, the task and the outcome of each coding job. The transcript above stays as it is.", "assistant");
     }
 
     /** Writes a conversation and refreshes the sidebar (its date changed, so it moves to the top). */
@@ -1284,16 +1501,34 @@ public class ChatWindow extends Application {
 
     /** Reloads the sidebar and keeps the open conversation selected. */
     private void refreshList() {
-        List<Summary> saved;
+        List<Summary> found;
         try {
-            saved = store.list();
+            found = store.list();
         } catch (RuntimeException e) {
-            saved = List.of();
+            found = List.of();
             showError("Could not read " + store.dir().toAbsolutePath(), e);
         }
-        selectingProgrammatically = true; // replacing items changes the selection; that isn't a click
+        saved = found;
+        // One folder row per trusted folder, the one with the newest conversation first (the list is newest first); the
+        // default folder and the open conversation's folder are always there, so a new conversation can start in them
+        Map<String, List<Summary>> byFolder = new LinkedHashMap<>();
+        for (Summary summary : found) byFolder.computeIfAbsent(summary.folder(), f -> new ArrayList<>()).add(summary);
+        byFolder.computeIfAbsent(conversationSettings.workFolderOrDefault().toAbsolutePath().toString(), f -> new ArrayList<>());
+        byFolder.computeIfAbsent(globalSettings.workFolderOrDefault().toAbsolutePath().toString(), f -> new ArrayList<>());
+        TreeItem<Object> root = new TreeItem<>();
+        byFolder.forEach((folder, summaries) -> {
+            TreeItem<Object> folderItem = new TreeItem<>(Path.of(folder));
+            summaries.forEach(s -> folderItem.getChildren().add(new TreeItem<>(s)));
+            folderItem.setExpanded(!collapsedFolders.contains(folder));
+            folderItem.expandedProperty().addListener((obs, was, expanded) -> {
+                if (expanded) collapsedFolders.remove(folder);
+                else collapsedFolders.add(folder);
+            });
+            root.getChildren().add(folderItem);
+        });
+        selectingProgrammatically = true; // replacing the rows changes the selection; that isn't a click
         try {
-            conversations.getItems().setAll(saved);
+            conversations.setRoot(root);
         } finally {
             selectingProgrammatically = false;
         }
@@ -1305,11 +1540,13 @@ public class ChatWindow extends Application {
         selectingProgrammatically = true;
         try {
             conversations.getSelectionModel().clearSelection();
-            if (id == null) return;
-            for (int i = 0; i < conversations.getItems().size(); i++) {
-                if (conversations.getItems().get(i).id().equals(id)) {
-                    conversations.getSelectionModel().select(i);
-                    return;
+            if (id == null || conversations.getRoot() == null) return;
+            for (TreeItem<Object> folder : conversations.getRoot().getChildren()) {
+                for (TreeItem<Object> row : folder.getChildren()) {
+                    if (row.getValue() instanceof Summary s && s.id().equals(id)) {
+                        conversations.getSelectionModel().select(row);
+                        return;
+                    }
                 }
             }
         } finally {
@@ -1332,21 +1569,68 @@ public class ChatWindow extends Application {
     /** While a turn runs: show the spinner and lock everything that would change the open conversation. */
     private void setBusy(boolean value) {
         busy.setVisible(value);
-        send.setDisable(value);
+        send.setText(value ? "Stop" : "Send"); // the send button stops the turn while it runs
         newChat.setDisable(value); // a turn saves into the open conversation; don't switch mid-turn
         conversations.setDisable(value);
         folderButton.setDisable(value);
         conversationSettingsButton.setDisable(value);
         memoryButton.setDisable(value); // the turn may change the facts; edit them afterwards
+        healthButton.setDisable(value);
+        if (!value) showHealth();
         attachButton.setDisable(value);
         if (!value) input.requestFocus(); // ready for the next question
+    }
+
+    // --- Where the person was ---
+
+    /** The window where it was (when that place is still on a screen), and the sidebar as it was. */
+    private void restorePlace() {
+        if (ui.hasBounds() && !javafx.stage.Screen.getScreensForRectangle(ui.x, ui.y, ui.width, ui.height).isEmpty()) {
+            stage.setX(ui.x);
+            stage.setY(ui.y);
+        }
+        if (ui.maximized) stage.setMaximized(true);
+        sidebar.setVisible(ui.sidebarVisible);
+        sidebar.setManaged(ui.sidebarVisible);
+    }
+
+    /** The text that was typed and not sent, and the conversation that was open. */
+    private void restoreSession() {
+        if (ui.draft != null && !ui.draft.isEmpty()) input.setText(ui.draft);
+        if (ui.lastConversation != null) saved.stream().filter(s -> s.id().equals(ui.lastConversation)).findFirst().ifPresent(this::open);
+    }
+
+    /** From now on every change of place, size, sidebar or typed text is written (a moment after the last one). */
+    private void watchPlace() {
+        saveUiSoon.setOnFinished(e -> ui.save());
+        Runnable changed = () -> {
+            if (!stage.isMaximized() && !stage.isIconified()) {
+                ui.x = stage.getX();
+                ui.y = stage.getY();
+                ui.width = stage.getWidth();
+                ui.height = stage.getHeight();
+            }
+            ui.maximized = stage.isMaximized();
+            ui.sidebarVisible = sidebar.isVisible();
+            ui.draft = input.getText();
+            saveUiSoon.playFromStart();
+        };
+        stage.xProperty().addListener((o, was, now) -> changed.run());
+        stage.yProperty().addListener((o, was, now) -> changed.run());
+        stage.widthProperty().addListener((o, was, now) -> changed.run());
+        stage.heightProperty().addListener((o, was, now) -> changed.run());
+        stage.maximizedProperty().addListener((o, was, now) -> changed.run());
+        sidebar.visibleProperty().addListener((o, was, now) -> changed.run());
+        input.textProperty().addListener((o, was, now) -> changed.run());
     }
 
     /** Called by JavaFX when the window closes. */
     @Override
     public void stop() {
-        worker.shutdownNow();               // interrupt a running turn instead of waiting for it
-        if (agent != null) agent.close(); // flushes pending LangSmith spans
-        Platform.exit();                    // end the JavaFX runtime
+        worker.shutdownNow(); // interrupt a running turn instead of waiting for it
+        if (agent != null) {
+            agent.close(); // flushes pending LangSmith spans
+        }
+        Platform.exit(); // end the JavaFX runtime
     }
 }

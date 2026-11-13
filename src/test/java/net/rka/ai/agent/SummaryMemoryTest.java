@@ -136,4 +136,48 @@ class SummaryMemoryTest {
         assertTrue(sent.size() < history.size()); // older messages replaced by the summary
         assertEquals(history.get(history.size() - 1), sent.get(sent.size() - 1));
     }
+
+    private static final ToolExecutionRequest READ = ToolExecutionRequest.builder().id("r1").name("readFile")
+            .arguments("{\"path\":\"big.txt\"}").build();
+    private static final ToolExecutionRequest WRITE = ToolExecutionRequest.builder().id("w1").name("writeFile")
+            .arguments("{\"path\":\"out.txt\",\"content\":\"" + "x".repeat(5000) + "\"}").build();
+
+    /** An earlier turn that read and wrote big files, then the current turn reading again. */
+    private static List<ChatMessage> twoTurns() {
+        return List.of(SystemMessage.from("system"),
+                UserMessage.from("first question"),
+                AiMessage.from(List.of(READ)), ToolExecutionResultMessage.from(READ, "A".repeat(20_000)),
+                AiMessage.from(List.of(WRITE)), ToolExecutionResultMessage.from(WRITE, "Wrote 5000 characters"),
+                AiMessage.from("Done."),
+                UserMessage.from("second question"),
+                AiMessage.from(List.of(READ)), ToolExecutionResultMessage.from(READ, "B".repeat(20_000)));
+    }
+
+    @Test
+    void earlierTurnsAreCompactedAndTheCurrentOneIsNot() throws Exception {
+        List<ChatMessage> messages = twoTurns();
+        List<ChatMessage> sent = SummaryMemory.compactEarlierTurns(messages);
+
+        assertEquals(messages.size(), sent.size()); // one message per message: the indices stay the same
+        String oldRead = ((ToolExecutionResultMessage) sent.get(3)).text();
+        assertTrue(oldRead.startsWith("A".repeat(SummaryMemory.EARLIER_TURN_CHARS)) && oldRead.length() < 600, oldRead);
+        assertTrue(oldRead.contains("shown in an earlier turn"), oldRead);
+        String oldWrite = ((AiMessage) sent.get(4)).toolExecutionRequests().getFirst().arguments();
+        var json = new com.fasterxml.jackson.databind.ObjectMapper().readTree(oldWrite); // still valid JSON
+        assertEquals("out.txt", json.get("path").asText());
+        assertEquals("[5000 characters, sent in an earlier turn]", json.get("content").asText());
+        assertEquals("w1", ((AiMessage) sent.get(4)).toolExecutionRequests().getFirst().id());
+        // The questions, the answer and the whole current turn are unchanged
+        for (int i : new int[] {0, 1, 5, 6, 7, 8, 9}) assertEquals(messages.get(i), sent.get(i));
+        // The same input gives the same output: every request of a turn sends identical text
+        assertEquals(sent, SummaryMemory.compactEarlierTurns(messages));
+    }
+
+    @Test
+    void aBigEarlierTurnDoesNotForceASummary() {
+        // Raw, the earlier turn is ~11,000 estimated tokens; compacted, the conversation is far below the limit
+        List<ChatMessage> messages = twoTurns();
+        assertTrue(SummaryMemory.cutoff(messages, 1, 8000, 2000) > 1);              // raw: would summarize
+        assertEquals(1, SummaryMemory.cutoff(SummaryMemory.compactEarlierTurns(messages), 1, 8000, 2000)); // compacted: not
+    }
 }

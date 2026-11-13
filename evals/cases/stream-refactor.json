@@ -1,0 +1,14 @@
+{
+  "id": "stream-refactor",
+  "description": "Rewrite the first part of a method and keep the discount code after it",
+  "fixture": "shop",
+  "prompt": "In Order.total, replace the for loop that adds up the items with a stream (mapToInt and sum). Keep the discount code below it exactly as it is.",
+  "expectCodingJob": true,
+  "checks": [
+    { "type": "fileContains", "path": "src/shop/Order.java", "regex": "mapToInt" },
+    { "type": "fileNotContains", "path": "src/shop/Order.java", "regex": "for\\s*\\(Item item : items\\)" },
+    { "type": "fileContains", "path": "src/shop/Order.java", "text": "sum = sum * 90 / 100; // premium customers pay 90 percent" },
+    { "type": "fileContains", "path": "src/shop/Order.java", "text": "} else if (sum > 10000) {" },
+    { "type": "command", "command": "javac -d out src/shop/*.java && java -cp out shop.Main", "outputContains": "total 1620" }
+  ]
+}

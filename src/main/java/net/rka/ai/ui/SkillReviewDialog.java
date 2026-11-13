@@ -7,9 +7,11 @@ import javafx.scene.control.ButtonBar;
 import javafx.scene.control.ButtonType;
 import javafx.scene.control.Label;
 import javafx.scene.control.ScrollPane;
+import javafx.scene.control.Tab;
+import javafx.scene.control.TabPane;
 import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
-import javafx.scene.control.ToggleButton;
+import javafx.scene.image.ImageView;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.stage.Window;
@@ -49,21 +51,6 @@ final class SkillReviewDialog {
         scroll.setPrefViewportHeight(360);
         markdown.prefWidthProperty().bind(scroll.widthProperty().subtract(30)); // room for the scroll bar
 
-        // The file as Save writes it, read-only and selectable; it takes the Markdown's place while the toggle is on
-        TextArea json = new TextArea(draft.json());
-        json.setEditable(false);
-        json.getStyleClass().add("command");
-        json.setPrefHeight(360);
-        json.setVisible(false);
-        json.managedProperty().bind(json.visibleProperty()); // a hidden area takes no room
-        scroll.managedProperty().bind(scroll.visibleProperty());
-
-        ToggleButton showJson = new ToggleButton("Show JSON");
-        showJson.selectedProperty().addListener((observable, was, on) -> {
-            json.setVisible(on);
-            scroll.setVisible(!on);
-        });
-
         Label caption = new Label("Comment");
         caption.getStyleClass().add("settings-caption");
         TextField comment = new TextField();
@@ -78,7 +65,12 @@ final class SkillReviewDialog {
             approval.getStyleClass().addAll("settings-help", "settings-error");
             content.getChildren().add(approval);
         }
-        content.getChildren().addAll(showJson, new StackPane(scroll, json), caption, comment);
+        content.getChildren().addAll(caption, comment);
+        // The draft's node graph as a flowchart, in its own tab next to the Markdown
+        ImageView diagram = DiagramView.render(draft.skill());
+        TabPane tabs = new TabPane(new Tab("Markdown", scroll), new Tab("Diagram", diagram));
+        tabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
+        content.getChildren().add(0, tabs);
         content.setPadding(new Insets(4, 0, 0, 0));
 
         Alert alert = new Alert(Alert.AlertType.CONFIRMATION);

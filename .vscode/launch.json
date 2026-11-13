@@ -3,10 +3,49 @@
     "configurations": [
         {
             "type": "java",
+            "name": "ManualLauncher",
+            "request": "launch",
+            "mainClass": "net.rka.ai.ManualLauncher",
+            "projectName": "local-assistant-langchain",
+            "preLaunchTask": "gradle classes",
+            "classPaths": [
+                "${workspaceFolder}/build/classes/java/main",
+                "${workspaceFolder}/build/resources/main",
+                "$Auto"
+            ]
+        },
+        {
+            "type": "java",
             "name": "Launcher",
             "request": "launch",
             "mainClass": "net.rka.ai.Launcher",
+            "projectName": "local-assistant-langchain",
+            "preLaunchTask": "gradle classes",
+            "classPaths": [
+                "${workspaceFolder}/build/classes/java/main",
+                "${workspaceFolder}/build/resources/main",
+                "$Auto"
+            ]
+        },
+        {
+            "type": "java",
+            "name": "JavaRoundTrip",
+            "request": "launch",
+            "mainClass": "net.rka.ai.tools.code.java.JavaRoundTrip",
             "projectName": "langchain"
+        },
+        {
+            "type": "java",
+            "name": "Launcher",
+            "request": "launch",
+            "mainClass": "net.rka.ai.Launcher",
+            "projectName": "langchain",
+            "preLaunchTask": "gradle classes",
+            "classPaths": [
+                "${workspaceFolder}/build/classes/java/main",
+                "${workspaceFolder}/build/resources/main",
+                "$Auto"
+            ]
         },
         {
             "type": "java",
@@ -14,7 +53,13 @@
             "request": "launch",
             "mainClass": "net.rka.ai.ui.Launcher",
             "vmArgs": "--enable-native-access=ALL-UNNAMED",
-            "envFile": "${workspaceFolder}/.env"
+            "envFile": "${workspaceFolder}/.env",
+            "preLaunchTask": "gradle classes",
+            "classPaths": [
+                "${workspaceFolder}/build/classes/java/main",
+                "${workspaceFolder}/build/resources/main",
+                "$Auto"
+            ]
         },
         {
             "type": "java",
@@ -22,7 +67,13 @@
             "request": "launch",
             "mainClass": "net.rka.ai.cli.Main",
             "args": "${input:question}",
-            "envFile": "${workspaceFolder}/.env"
+            "envFile": "${workspaceFolder}/.env",
+            "preLaunchTask": "gradle classes",
+            "classPaths": [
+                "${workspaceFolder}/build/classes/java/main",
+                "${workspaceFolder}/build/resources/main",
+                "$Auto"
+            ]
         }
     ],
     "inputs": [

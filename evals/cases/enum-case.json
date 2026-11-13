@@ -1,0 +1,13 @@
+{
+  "id": "enum-case",
+  "description": "Add an enum constant and a case in a switch in another file",
+  "fixture": "shop",
+  "prompt": "Add OVERNIGHT to the Speed enum. Shipping.cost returns 2500 for it. Make Main also print \"overnight \" and its cost after the shipping line.",
+  "expectCodingJob": true,
+  "checks": [
+    { "type": "fileContains", "path": "src/shop/Speed.java", "text": "OVERNIGHT" },
+    { "type": "fileContains", "path": "src/shop/Shipping.java", "text": "case EXPRESS:" },
+    { "type": "command", "command": "javac -d out src/shop/*.java && java -cp out shop.Main", "outputContains": "overnight 2500" },
+    { "type": "command", "command": "javac -d out src/shop/*.java && java -cp out shop.Main", "outputContains": "shipping 500" }
+  ]
+}

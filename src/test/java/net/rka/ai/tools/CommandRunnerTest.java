@@ -39,4 +39,15 @@ class CommandRunnerTest {
                 "\"first\" arrived while the command was still sleeping");
         assertTrue(result.startsWith("exit code: 0") && result.contains("first") && result.contains("second"), result);
     }
+
+    @Test
+    void anOutputFileAProcessStillHoldsOpenDoesNotFailTheCommand(@TempDir Path dir) throws Exception {
+        // A build tool's daemon keeps the redirected output open; on Windows deleting it then throws
+        Path held = dir.resolve("tool-out.txt");
+        java.nio.file.Files.writeString(held, "result");
+        try (java.io.RandomAccessFile open = new java.io.RandomAccessFile(held.toFile(), "r")) {
+            CommandRunner.discard(held); // must not throw, whether or not the file could be deleted now
+            assertTrue(open.length() > 0);
+        }
+    }
 }

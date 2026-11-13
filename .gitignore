@@ -5,3 +5,9 @@ bin/
 traces/
 conversations/
 settings.json
+
+# Written by JavaEveryConstructTest next to its input
+*_output.java
+
+# Evaluation runs: the agent logs and the projects the agent changed
+evals/results/

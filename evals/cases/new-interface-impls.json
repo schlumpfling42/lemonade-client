@@ -1,0 +1,15 @@
+{
+  "id": "new-interface-impls",
+  "description": "Create three new files in a package: an interface and two implementations",
+  "fixture": "shop",
+  "prompt": "In the shop package create an interface Discount with a method int apply(int cents), and two classes implementing it: PremiumDiscount (returns 85 percent of cents) and LargeOrderDiscount (returns 95 percent). Do not change the existing classes.",
+  "expectCodingJob": true,
+  "checks": [
+    { "type": "fileExists", "path": "src/shop/Discount.java" },
+    { "type": "fileContains", "path": "src/shop/PremiumDiscount.java", "regex": "implements\\s+Discount" },
+    { "type": "fileContains", "path": "src/shop/LargeOrderDiscount.java", "regex": "implements\\s+Discount" },
+    { "type": "fileContains", "path": "src/shop/Discount.java", "text": "package shop;" },
+    { "type": "command", "command": "javac -d out src/shop/*.java && java -cp out shop.Main", "outputContains": "total 1620" },
+    { "type": "fileUnchanged", "path": "src/shop/Order.java" }
+  ]
+}

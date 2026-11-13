@@ -24,7 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /** How {@link ConsoleApprover#reviewPlan} shows the plan and reads the user's answer from the terminal. */
 class ConsoleApproverTest {
 
-    private static final CodingPlan PLAN = new CodingPlan("Add a README", List.of(), List.of());
+    private static final CodingPlan PLAN = new CodingPlan("Add a README", List.of(), List.of(), List.of(), List.of());
 
     /** Asks about the plan with {@code input} as the typed text. */
     private static PlanDecision answer(String input) {
@@ -54,10 +54,11 @@ class ConsoleApproverTest {
     }
 
     @Test
-    void revisedPlanShowsTheReasonAndTheDoneSteps() {
-        CodingPlan plan = CodingPlan.parse("{\"summary\":\"Readme\",\"steps\":[{\"description\":\"Write it\"},"
-                + "{\"description\":\"Link it\"}]}");
-        PlanReview review = new PlanReview(plan, 1, Set.of(), "writeFile docs/b.md: not in the plan", "", true);
+    void revisedPlanShowsTheReasonAndTheMadeChanges() {
+        CodingPlan plan = CodingPlan.parse("{\"summary\":\"Readme\",\"changes\":["
+                + "{\"file\":\"README.md\",\"section\":\"Intro\",\"action\":\"replace\",\"intent\":\"Write it\"},"
+                + "{\"file\":\"docs/b.md\",\"action\":\"create\",\"intent\":\"Link it\"}]}");
+        PlanReview review = new PlanReview(plan, Set.of(0), Set.of(), "the build reports problems in docs/b.md", "", true);
         PrintStream original = System.out;
         ByteArrayOutputStream printed = new ByteArrayOutputStream();
         System.setOut(new PrintStream(printed, true, StandardCharsets.UTF_8));
@@ -67,8 +68,8 @@ class ConsoleApproverTest {
             System.setOut(original);
         }
         String out = printed.toString(StandardCharsets.UTF_8);
-        assertTrue(out.contains("Revised plan: writeFile docs/b.md: not in the plan"), out);
-        assertTrue(out.contains("1. ✓ Write it") && out.contains("2. Link it"), out);
+        assertTrue(out.contains("Revised plan: the build reports problems in docs/b.md"), out);
+        assertTrue(out.contains("1. ✓ replace `README.md` · `Intro`: Write it") && out.contains("2. create `docs/b.md`: Link it"), out);
     }
 
     private static final SkillQuestion QUESTION = new SkillQuestion("tidy", "ask", "Delete the old notes?", List.of("Yes", "No", "Skip"));

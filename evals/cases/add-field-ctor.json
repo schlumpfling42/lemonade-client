@@ -1,0 +1,12 @@
+{
+  "id": "add-field-ctor",
+  "description": "Add a field, a constructor parameter, use it in a method and update the caller",
+  "fixture": "shop",
+  "prompt": "An Order should know its customer: add a String customer as the first constructor parameter and store it in a field. Order.print must print \"Customer: \" and the name as its first line. Make Main pass \"Ana\".",
+  "expectCodingJob": true,
+  "checks": [
+    { "type": "command", "command": "javac -d out src/shop/*.java && java -cp out shop.Main", "outputContains": "Customer: Ana" },
+    { "type": "command", "command": "javac -d out src/shop/*.java && java -cp out shop.Main", "outputContains": "total 1620" },
+    { "type": "fileContains", "path": "src/shop/Order.java", "regex": "private\\s+final\\s+String\\s+customer" }
+  ]
+}

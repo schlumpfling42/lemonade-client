@@ -1,0 +1,13 @@
+{
+  "id": "add-plugin",
+  "description": "A new renderer plugin: the class alone does nothing, it has to be registered (a plan that only creates the class is dead code)",
+  "fixture": "plugins",
+  "prompt": "Add a renderer plugin that reverses the text, so Registry.render(\"reverse\", \"hello\") gives olleh.",
+  "expectCodingJob": true,
+  "timeoutMinutes": 12,
+  "checks": [
+    { "type": "command", "command": "javac -d out *.java && java -cp out Main", "outputContains": "olleh" },
+    { "type": "fileContains", "path": "Registry.java", "text": "Reverse" },
+    { "type": "fileUnchanged", "path": "Main.java" }
+  ]
+}

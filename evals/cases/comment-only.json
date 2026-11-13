@@ -1,0 +1,13 @@
+{
+  "id": "comment-only",
+  "description": "Change a doc comment and no code",
+  "fixture": "shop",
+  "prompt": "Update the Javadoc of Order.total to say that it applies the premium discount or the large-order discount. Change no code.",
+  "expectCodingJob": true,
+  "checks": [
+    { "type": "fileContains", "path": "src/shop/Order.java", "regex": "/\\*\\*[^/]*[Pp]remium[^/]*\\*/\\s*public int total\\(\\)" },
+    { "type": "fileContains", "path": "src/shop/Order.java", "text": "sum = sum * 90 / 100;" },
+    { "type": "fileContains", "path": "src/shop/Order.java", "text": "sum = sum * 95 / 100;" },
+    { "type": "command", "command": "javac -d out src/shop/*.java && java -cp out shop.Main", "outputContains": "total 1620" }
+  ]
+}

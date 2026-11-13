@@ -267,6 +267,24 @@ public final class GenericKinds {
         };
     }
 
+    /** Whether the user refused the call (see the approval step). */
+    static boolean isDenial(ToolExecutionResultMessage result) {
+        return result.text() != null && result.text().startsWith("Denied: the user did not approve this call");
+    }
+
+    /**
+     * Whether the results at the end of the transcript (the last round) are all notes that the call repeated an earlier one, or all
+     * denials by the user: the model then answers without tools instead of trying another command the user will be asked about.
+     */
+    static boolean repeatedOnly(List<ChatMessage> messages) {
+        int count = 0;
+        for (int i = messages.size() - 1; i >= 0 && messages.get(i) instanceof ToolExecutionResultMessage result; i--) {
+            if (!net.rka.ai.agent.ToolCallRunner.isRepeat(result) && !isDenial(result)) return false;
+            count++;
+        }
+        return count > 0;
+    }
+
     /**
      * Whether the node's current visit goes on: it is the node that ran last and its tool calls were
      * just answered (by {@code toolStep} or {@code toolApproval}). Anything else is a new visit, which
@@ -296,7 +314,7 @@ public final class GenericKinds {
     }
 
     /** The {@code skillVars} update that sets one variable. */
-    private static String withVar(State state, String name, Object value) {
+    public static String withVar(State state, String name, Object value) {
         Map<String, Object> vars = vars(state);
         vars.put(name, value);
         return json(vars);
@@ -536,7 +554,7 @@ public final class GenericKinds {
     /** Asks the model; with {@code tools}, a ReAct loop. The answer goes to {@code output}. */
     private static final class Model extends Spec {
         Model() {
-            super("model", Set.of("prompt"), Set.of("tools", "output", "format", "thinking"));
+            super("model", Set.of("prompt"), Set.of("tools", "output", "format", "thinking", "maxTokens", "effort"));
         }
 
         @Override
@@ -550,6 +568,11 @@ public final class GenericKinds {
             variable(node, "output", node.fields().get("output"), errors);
             oneOf(node, "format", Set.of("text", "json"), errors);
             oneOf(node, "thinking", Set.of("shown", "progress"), errors);
+            oneOf(node, "effort", net.rka.ai.agent.Effort.LEVELS, errors);
+            Object maxTokens = node.fields().get("maxTokens");
+            if (maxTokens != null && !(maxTokens instanceof Integer n && n >= 50 && n <= 32_000)) {
+                errors.add(where(node) + "`maxTokens` must be a whole number from 50 to 32000.");
+            }
         }
 
         @Override
@@ -575,6 +598,7 @@ public final class GenericKinds {
             boolean json = "json".equals(node.fields().get("format"));
             Set<String> tools = listedTools(node, runtime.toolCalls().tools());
             int maxRounds = runtime.skill().limits().maxToolRounds();
+            Integer maxTokens = node.fields().get("maxTokens") instanceof Integer n ? n : null; // null: the model's own limit
             String system = runtime.skill().description() + "\n\n" + PREAMBLE;
             return (state, config) -> {
                 boolean continuing = continuesVisit(state, node.id());
@@ -584,21 +608,31 @@ public final class GenericKinds {
                 if (!continuing) added.add(UserMessage.from(Templates.render(prompt, vars(state))));
                 List<ChatMessage> messages = new ArrayList<>();
                 messages.add(SystemMessage.from(system));
-                if (continuing) messages.addAll(visitMessages(state)); // the prompt, the calls and their results
+                if (continuing) messages.addAll(net.rka.ai.agent.RollingResults.apply(net.rka.ai.agent.ContextGroom.apply(visitMessages(state)))); // the prompt, the calls and their results
                 messages.addAll(added);
 
                 Map<String, Object> updates = new HashMap<>();
                 updates.put(State.SKILL_TOOL_ROUNDS, rounds);
-                boolean offerTools = !tools.isEmpty() && rounds < maxRounds;
+                // A round whose calls all repeated earlier ones is a loop: the model is told once and then asked to answer, not 40 rounds later
+                boolean looped = continuing && repeatedOnly(state.skillMessages());
+                boolean offerTools = !tools.isEmpty() && rounds < maxRounds && !looped;
                 ChatRequest.Builder request = ChatRequest.builder();
+                if (node.fields().get("effort") instanceof String effort) request.parameters(net.rka.ai.agent.Effort.parameters(effort));
+                if (maxTokens != null) request.maxOutputTokens(maxTokens); // a step that writes notes has no use for a runaway reply
                 List<ChatMessage> sent = new ArrayList<>(messages);
                 if (offerTools) {
                     // Only the listed tools, so the model isn't offered calls that would be refused
                     request.toolSpecifications(runtime.toolCalls().tools().specifications(tools::contains));
                 } else if (!tools.isEmpty()) {
+                    // The tool definitions stay in the request, with the choice "none": they are the start of the prompt, and a prompt
+                    // without them looks new to the model server, which then reads the whole conversation again (89 s at 12,000 tokens)
+                    request.toolSpecifications(runtime.toolCalls().tools().specifications(tools::contains));
+                    request.toolChoice(dev.langchain4j.model.chat.request.ToolChoice.NONE);
                     // Only this request needs it, so it isn't stored in the transcript
-                    sent.add(UserMessage.from("You have used " + maxRounds + " rounds of tool calls in this step."
-                            + " Answer now without tool calls."));
+                    sent.add(UserMessage.from(looped
+                            ? "Your last tool calls repeated earlier ones and gave nothing new. Answer now without tool calls:"
+                            + " say what you found, or what blocks you."
+                            : "You have used " + maxRounds + " rounds of tool calls in this step. Answer now without tool calls."));
                 }
                 AiMessage reply;
                 try {

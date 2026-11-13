@@ -1,0 +1,15 @@
+{
+  "id": "properties-edit",
+  "description": "Change one value in a file that is not code and leave the rest",
+  "fixture": "config",
+  "prompt": "Change the port in app.properties to 9090. Keep everything else as it is.",
+  "expectCodingJob": true,
+  "checks": [
+    { "type": "fileContains", "path": "app.properties", "text": "port=9090" },
+    { "type": "fileNotContains", "path": "app.properties", "text": "8080" },
+    { "type": "fileContains", "path": "app.properties", "text": "mode=dev" },
+    { "type": "fileContains", "path": "app.properties", "text": "log.level=info" },
+    { "type": "fileContains", "path": "app.properties", "text": "# Application settings" },
+    { "type": "fileUnchanged", "path": "README.md" }
+  ]
+}

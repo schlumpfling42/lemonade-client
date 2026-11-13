@@ -62,7 +62,7 @@ public record SkillFile(String name, String tool, String description, List<Input
      *
      * @param maxSteps      node visits per run
      * @param maxToolRounds rounds of tool calls per visit of a {@code model} node
-     * @param extra         limits of particular node kinds, e.g. the coding kinds' {@code maxStepTurns}
+     * @param extra         limits of particular node kinds, e.g. the coding kinds' {@code maxEditAttempts}
      */
     public record Limits(int maxSteps, int maxToolRounds, Map<String, Integer> extra) {
         public Limits {

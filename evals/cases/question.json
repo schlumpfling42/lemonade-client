@@ -1,0 +1,12 @@
+{
+  "id": "question",
+  "description": "A question about code is answered, not turned into a coding job, and nothing changes",
+  "fixture": "calc",
+  "prompt": "What does the add method in Calc do?",
+  "expectCodingJob": false,
+  "checks": [
+    { "type": "answerMatches", "regex": "sum|adds|plus|a \\+ b" },
+    { "type": "fileUnchanged", "path": "src/Calc.java" },
+    { "type": "fileUnchanged", "path": "src/Main.java" }
+  ]
+}

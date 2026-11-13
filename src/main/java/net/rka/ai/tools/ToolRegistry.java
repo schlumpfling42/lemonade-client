@@ -72,16 +72,32 @@ public final class ToolRegistry {
 
     /** The tools the agent uses. Register new tool classes here. */
     public static ToolRegistry defaultTools() {
-        return of(
+        List<Object> tools = new ArrayList<>(List.of(
                 new DateTimeTools(),
                 new MathTools(),
                 new FileTools(),
+                new OutlineTools()));
+        // The Java workspace tools (JavaTools) are not offered to the model: it struggled with them. The workspace itself still
+        // backs the file and outline tools. JAVA_TOOLS=true offers them again.
+        if (Boolean.parseBoolean(System.getenv("JAVA_TOOLS"))) tools.add(new JavaTools());
+        tools.addAll(List.of(
                 new MemoryTools(),
                 new WebTools(),
                 new TerminalTools(),
                 new SshTools(),
                 new CodingTools(),  // startCodingJob: never runs, the graph routes it to the coding subgraph
-                new SkillTools());  // buildSkill: never runs, the graph routes it to the skill builder
+                new SkillTools()));  // buildSkill: never runs, the graph routes it to the skill builder
+        // The Java changes the tools hold in memory are written to the files after every tool that changes files
+        return of(tools.toArray()).afterWrite(parameters -> {
+            net.rka.ai.tools.code.java.JavaWorkspace.FlushResult flushed;
+            try {
+                flushed = net.rka.ai.tools.code.java.JavaWorkspaces.shared().flush(WorkFolder.of(parameters));
+            } catch (java.io.UncheckedIOException | IllegalArgumentException | IllegalStateException e) {
+                return ""; // no working folder in these parameters: nothing is held for it
+            }
+            return flushed.ok() ? "" : "Not written to disk: these Java files changed on disk while they had changes in memory: "
+                    + String.join(", ", flushed.conflicts()) + ". javaFlush with force true writes the changes over the files, javaDiscard takes the files as they are.";
+        });
     }
 
     // LinkedHashMap keeps registration order, so the model sees the tools in a stable order
@@ -91,6 +107,8 @@ public final class ToolRegistry {
     private final Set<String> needApproval = new HashSet<>();
     private final Set<String> webContent = new HashSet<>();
     private final Set<String> writesFiles = new HashSet<>();
+    // What runs after a tool that changes files has succeeded (see afterWrite): by default nothing
+    private java.util.function.Function<InvocationParameters, String> afterWrite = p -> "";
     // The tools that start a skill (withSkills): specified for the model, never executed
     private final Set<String> skillTools = new HashSet<>();
     // The registry without skill tools that withSkills starts from (this one, for a registry made by of())
@@ -102,8 +120,12 @@ public final class ToolRegistry {
     public static ToolRegistry of(Object... toolObjects) {
         ToolRegistry registry = new ToolRegistry();
         for (Object tools : toolObjects) {
-            // getDeclaredMethods: only methods declared in this class (not inherited ones)
-            for (Method method : tools.getClass().getDeclaredMethods()) {
+            // getDeclaredMethods: only methods declared in this class (not inherited ones). Its order isn't
+            // specified, so they are sorted by name: the tool list is then the same on every start, and a
+            // local model server can reuse its cached prompt (the tool list is at the very start of it)
+            Method[] methods = tools.getClass().getDeclaredMethods();
+            java.util.Arrays.sort(methods, java.util.Comparator.comparing(Method::getName));
+            for (Method method : methods) {
                 if (!method.isAnnotationPresent(Tool.class)) continue;
                 // LangChain4j builds the description and the JSON schema from @Tool, @P and the parameter types.
                 // Parameters of type InvocationParameters are left out of the schema: the model never sees them.
@@ -143,6 +165,7 @@ public final class ToolRegistry {
         view.needApproval.addAll(base.needApproval);
         view.webContent.addAll(base.webContent);
         view.writesFiles.addAll(base.writesFiles);
+        view.afterWrite = base.afterWrite;
         for (SkillFile skill : skills) {
             String name = skill.toolName();
             view.specifications.put(name, skillSpecification(skill));
@@ -203,6 +226,29 @@ public final class ToolRegistry {
         return webContent.contains(toolName);
     }
 
+    /**
+     * What runs after a {@link WritesFiles} tool has succeeded; its answer (empty when all is well) is added to the tool's result. The
+     * app uses it to write the Java changes held in memory to the files at once, so nothing the model has written waits in memory for a
+     * command or the end of the turn (the user sees the file, and a command that waits for approval is approved with the files in place).
+     */
+    public ToolRegistry afterWrite(java.util.function.Function<InvocationParameters, String> hook) {
+        this.afterWrite = hook;
+        return this;
+    }
+
+    /**
+     * The tools whose parameters have no names: the model is offered {@code arg0}, {@code arg1} instead of {@code path}, {@code content}
+     * when the classes were compiled without {@code -parameters} (Gradle sets it; the compiler of an editor may not). Such a model has to
+     * guess what each argument is. Empty when all is well.
+     */
+    public List<String> toolsWithUnnamedParameters() {
+        List<String> found = new ArrayList<>();
+        for (ToolSpecification spec : specifications.values()) {
+            if (spec.parameters() != null && spec.parameters().properties().keySet().stream().anyMatch(k -> k.matches("arg\\d+"))) found.add(spec.name());
+        }
+        return found;
+    }
+
     /** Whether the tool changes files ({@link WritesFiles}). */
     public boolean writesFiles(String toolName) {
         return writesFiles.contains(toolName);
@@ -259,16 +305,25 @@ public final class ToolRegistry {
                     .invocationParameters(parameters)
                     .timestampNow()
                     .build();
+            // How long each call takes is in the agent log (ToolCallRunner) and the traces
             ToolExecutionResult result = executor.executeWithContext(call, context);
-            return result.isError()
-                    ? error(call, "Error: " + result.resultText())
-                    : ToolExecutionResultMessage.from(call, result.resultText());
+            if (result.isError()) return error(call, "Error: " + result.resultText());
+            String note = writesFiles.contains(call.name()) ? safeAfterWrite(parameters) : "";
+            return ToolExecutionResultMessage.from(call, note.isEmpty() ? result.resultText() : result.resultText() + "\n" + note);
         } catch (Exception e) {
             // Reflection wraps the tool's own exception in InvocationTargetException; unwrap it so the
             // model sees "Cannot divide by zero", not "InvocationTargetException: null"
             Throwable cause = e instanceof InvocationTargetException ite ? ite.getCause() : e;
             while (cause.getCause() != null && cause.getMessage() == null) cause = cause.getCause();
             return error(call, "Error: " + cause.getMessage());
+        }
+    }
+
+    private String safeAfterWrite(InvocationParameters parameters) {
+        try {
+            return afterWrite.apply(parameters);
+        } catch (RuntimeException e) {
+            return "Not written to disk: " + e.getMessage();
         }
     }
 

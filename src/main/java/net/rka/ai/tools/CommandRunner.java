@@ -130,8 +130,22 @@ final class CommandRunner {
                     + "\n--- stdout ---\n" + tail(read(stdout))
                     + "\n--- stderr ---\n" + tail(read(stderr));
         } finally {
-            Files.deleteIfExists(stdout);
-            Files.deleteIfExists(stderr);
+            discard(stdout);
+            discard(stderr);
+        }
+    }
+
+    /**
+     * Deletes an output file without ever failing the command. A build tool can leave a background process (the Gradle
+     * daemon) that inherited the redirected output and keeps the file open, which on Windows makes the delete throw
+     * "being used by another process": the command's result was read already, and a failure here would replace it.
+     * The file is then left for the JVM's exit.
+     */
+    static void discard(Path file) {
+        try {
+            Files.deleteIfExists(file);
+        } catch (IOException e) {
+            file.toFile().deleteOnExit();
         }
     }
 

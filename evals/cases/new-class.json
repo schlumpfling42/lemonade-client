@@ -1,0 +1,12 @@
+{
+  "id": "new-class",
+  "description": "Create a new class and use it from existing code",
+  "fixture": "calc",
+  "prompt": "Create a class Greeter in src with a method greet(String name) that returns \"Hello, \" + name + \"!\". Then make Main print Greeter's greeting for \"World\" after the existing line.",
+  "expectCodingJob": true,
+  "checks": [
+    { "type": "fileExists", "path": "src/Greeter.java" },
+    { "type": "command", "command": "javac -d out src/Calc.java src/Greeter.java src/Main.java && java -cp out Main", "outputContains": "Hello, World!" },
+    { "type": "command", "command": "javac -d out src/Calc.java src/Greeter.java src/Main.java && java -cp out Main", "outputContains": "2 + 3 = 5" }
+  ]
+}

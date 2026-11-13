@@ -1,0 +1,11 @@
+{
+  "id": "fix-bug",
+  "description": "Find and fix a wrong result from a description of the symptom",
+  "fixture": "stats",
+  "prompt": "Stats.average gives the wrong result: for 2, 4 and 6 the program prints 3.0 but the average is 4.0. Fix it.",
+  "expectCodingJob": true,
+  "checks": [
+    { "type": "command", "command": "javac -d out src/Stats.java src/Main.java && java -cp out Main", "outputContains": "average 4.0" },
+    { "type": "command", "command": "javac -d out src/Stats.java src/Main.java && java -cp out Main", "outputContains": "max 6" }
+  ]
+}

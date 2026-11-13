@@ -1,0 +1,12 @@
+{
+  "id": "import-needed",
+  "description": "New code that needs an import, in a method that also changes another file",
+  "fixture": "shop",
+  "prompt": "Add a method names() to Order that returns a List<String> with the names of the items, built with a stream and Collectors. Then make Main print order.names() after the count line.",
+  "expectCodingJob": true,
+  "checks": [
+    { "type": "fileContains", "path": "src/shop/Order.java", "regex": "List<String>\\s+names\\s*\\(\\s*\\)" },
+    { "type": "command", "command": "javac -d out src/shop/*.java && java -cp out shop.Main", "outputContains": "[pen, book]" },
+    { "type": "fileContains", "path": "src/shop/Order.java", "text": "import java.util.ArrayList;" }
+  ]
+}

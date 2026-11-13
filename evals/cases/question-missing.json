@@ -1,0 +1,11 @@
+{
+  "id": "question-missing",
+  "description": "A question about something that does not exist: the answer must say so",
+  "fixture": "shop",
+  "prompt": "Is there a method in Order that removes an item?",
+  "expectCodingJob": false,
+  "checks": [
+    { "type": "answerMatches", "regex": "\\bno\\b|not|n't|none" },
+    { "type": "fileUnchanged", "path": "src/shop/Order.java" }
+  ]
+}

@@ -11,8 +11,8 @@ import java.util.regex.Pattern;
  * Reasoning models send their thinking in one of two ways: as a separate field, which LangChain4j
  * puts into {@link AiMessage#thinking()} (the model is built with {@code returnThinking(true)}), or
  * inline at the start of the text as {@code <think>…</think>} (Qwen3 and DeepSeek-R1 style, when the
- * server doesn't split it off). Both end up in {@link #thinking()}. Models without thinking, like the
- * default Qwen3 Instruct model, simply have none.
+ * server doesn't split it off). Both end up in {@link #thinking()}. Models without thinking, like a
+ * Qwen3 Instruct model, simply have none.
  *
  * @param thinking what the model considered before answering; "" if none
  * @param text     what it said, without the thinking; "" if none

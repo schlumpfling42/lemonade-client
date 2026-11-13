@@ -60,7 +60,9 @@ public final class Tracing implements AutoCloseable {
 
     public static Tracing fromEnv() {
         // The "resource" describes who produces the spans; service.name is what backends group by
+        // A model call records two attributes per message of its prompt: the default limit of 128 cut the later calls of a long job
         SdkTracerProviderBuilder builder = SdkTracerProvider.builder()
+                .setSpanLimits(io.opentelemetry.sdk.trace.SpanLimits.builder().setMaxNumberOfAttributes(4096).build())
                 .setResource(Resource.getDefault().merge(Resource.create(Attributes.of(
                         AttributeKey.stringKey("service.name"), "langchain-example"))));
         List<String> destinations = new ArrayList<>();

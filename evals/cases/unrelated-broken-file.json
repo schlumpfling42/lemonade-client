@@ -1,0 +1,13 @@
+{
+  "id": "unrelated-broken-file",
+  "description": "The folder holds old code that does not compile; the job must fix the app and leave that alone (a 90-minute repair of unrelated code started this way)",
+  "fixture": "legacy",
+  "prompt": "In the app folder, Calc.add gives the wrong result: 2 + 3 prints 6. Find out why and fix it.",
+  "expectCodingJob": true,
+  "timeoutMinutes": 12,
+  "checks": [
+    { "type": "command", "command": "javac -d out app/Calc.java app/Main.java && java -cp out Main", "outputContains": "2 + 3 = 5" },
+    { "type": "fileUnchanged", "path": "legacy/Old.java" },
+    { "type": "fileUnchanged", "path": "app/Main.java" }
+  ]
+}

@@ -16,10 +16,13 @@ The graph has three kinds of subgraphs:
 ```mermaid
 flowchart TD
     START([START]) --> memory["memory<br/><i>summarize: replace old messages<br/>with a summary if too long</i>"]
-    memory --> agent["agent<br/><i>callModel: ask the model<br/>(summary + recent messages)</i>"]
+    memory --> analyze["analyze<br/><i>the model returns the goal and next:<br/>an edge, a tool call or a question<br/>a job edge adds the startCodingJob call</i>"]
+    analyze -- "no question" --> agent["agent<br/><i>callModel: ask the model<br/>(summary + recent messages)</i>"]
+    analyze -- "question" --> ask{{"⏸ interrupt before ask<br/>Agent asks the Approver<br/>the answer joins the conversation"}}
+    ask --> analyze
 
     agent -- "done<br/>no tool calls<br/>(after 12 tool rounds the model<br/>is asked without tools)" --> END([END])
-    agent -- "skill-coding<br/>a startCodingJob call<br/>(one of the skill-* routes)" --> coding_start
+    agent -- "skill-coding<br/>a startCodingJob call: the model's, the analysis'<br/>or callModel's from a hand edit of code<br/>(one of the skill-* routes)" --> coding_start
     agent -- "skillBuilder<br/>a buildSkill call" --> builder_tools
     agent -- "skill-*<br/>a call of a loaded skill's tool<br/>(skill-NAME)" --> skill_start
     agent -- "tools<br/>only safe calls" --> tools["tools<br/><i>executeTools</i>"]
@@ -86,52 +89,69 @@ flowchart TD
 
     subgraph coding ["skill-coding (the built-in coding.json; steps in CodingGraph)"]
         coding_start["start<br/><i>find the startCodingJob call</i>"]
-        coding_environment["environment<br/><i>goal, fresh job state,<br/>cached environment summary</i>"]
-        coding_investigate["investigate<br/><i>model: read-only tools + fixed probes</i>"]
-        coding_investigateTools["investigateTools<br/><i>run the allowed calls</i>"]
-        coding_plan["plan<br/><i>model: plan JSON</i>"]
-        coding_review["review<br/><i>model: check the plan JSON</i>"]
+        coding_environment["environment<br/><i>goal, fresh job state, cached environment,<br/>the folder's files (project map)</i>"]
+        coding_pickFiles["pickFiles<br/><i>model: plan, study or free? which files?<br/>{approach, files: [...]}</i>"]
+        coding_gather["gather<br/><i>graph: the outlines of those files</i>"]
+        coding_plan["plan<br/><i>model: calls submit_plan (changes by section);<br/>graph: validates it, reads sections it asks for</i>"]
         coding_pause{{"⏸ interrupt before skill-coding-planApproval<br/>Agent shows the plan:<br/>Approve / Revise (comment) / Deny"}}
-        coding_planApproval["planApproval<br/><i>records an approved plan;<br/>the router reads the answer</i>"]
-        coding_implement["implement<br/><i>model: one plan step per turn;<br/>no item ran → remind once, then skip</i>"]
-        coding_implementTools["implementTools<br/><i>plan check, then run;<br/>record the step's items that ran</i>"]
-        coding_verify["verify<br/><i>run the plan's verify commands</i>"]
-        coding_designReview["designReview<br/><i>check the changed code against the design guide</i>"]
-        coding_report["report<br/><i>Markdown report = the call's result</i>"]
+        coding_planApproval["planApproval<br/><i>records the approved plan, the ledger<br/>and copies of the files (baseline)</i>"]
+        coding_revise["revise<br/><i>model: is the comment a question or a change?<br/>a question is answered, a change becomes points</i>"]
+        coding_setup["setup<br/><i>graph: the approved setup commands</i>"]
+        coding_edit["edit<br/><i>model: the new text of all changes to one file<br/>(calls write_code: one text each); graph applies them<br/>in one write, records them in the ledger</i>"]
+        coding_verify["verify<br/><i>graph: the verify commands;<br/>messages mapped to sections</i>"]
+        coding_fix["fix<br/><i>model: the new text of a failing section;<br/>graph applies it</i>"]
+        coding_report["report<br/><i>graph: the Markdown report, and whether any code changed</i>"]
+        coding_explain["explain<br/><i>model: why no code changed, what the user can do</i>"]
+        coding_answer["answer<br/><i>the report (+ explanation) = the call's result;<br/>success: + the text for the user</i>"]
+        coding_study["study<br/><i>locate: model with read-only tools (generic model node):<br/>finds the code, reads parts whole, answers where the change belongs</i>"]
+        coding_work["work<br/><i>model with tools (generic model node, ReAct loop):<br/>open-ended work, no plan</i>"]
+        coding_check["check<br/><i>no model: the folder's own build command<br/>(VerifyDefaults) after the work</i>"]
+        coding_repair["repair<br/><i>model with tools: fixes what the<br/>failed build check printed (once)</i>"]
+        coding_recheck["recheck<br/><i>the same check, once more</i>"]
+        coding_workDone["workDone<br/><i>finish: the model's report + the build check = the call's result</i>"]
         coding_stopped["stopped<br/><i>only if a step failed without a report<br/>or over maxSteps</i>"]
 
         coding_start --> coding_environment
-        coding_environment --> coding_investigate
-        coding_investigate -- "tools" --> coding_investigateTools
-        coding_investigate -- "plan<br/>findings (6 rounds at most)" --> coding_plan
-        coding_investigate -- "stopped<br/>model error" --> coding_report
-        coding_investigateTools -- "investigate" --> coding_investigate
-        coding_investigateTools -- "stopped<br/>tool error" --> coding_report
-        coding_plan -- "review" --> coding_review
-        coding_plan -- "stopped<br/>model error" --> coding_report
-        coding_review -- "approval<br/>valid plan" --> coding_pause
+        coding_environment --> coding_pickFiles
+        coding_pickFiles -- "done<br/>work that can be planned" --> coding_gather
+        coding_pickFiles -- "study<br/>needs the existing code understood first" --> coding_study
+        coding_study -- "done" --> coding_gather
+        coding_pickFiles -- "free<br/>open-ended work: no plan" --> coding_work
+        coding_work -- "done" --> coding_check
+        coding_check -- "passed / none<br/>(no build command)" --> coding_workDone
+        coding_check -- "failing" --> coding_repair
+        coding_repair -- "done" --> coding_recheck
+        coding_recheck -- "passed / none / failing" --> coding_workDone
+        coding_workDone -. "a finish: ends the skill" .-> coding_end
+        coding_pickFiles -- "stopped<br/>model error, no JSON twice" --> coding_report
+        coding_gather --> coding_plan
+        coding_plan -- "read<br/>the plan asked for code (2 rounds at most)" --> coding_plan
+        coding_plan -- "approval<br/>valid plan" --> coding_pause
+        coding_plan -- "stopped<br/>no valid plan after 2 attempts, model error" --> coding_report
         coding_pause --> coding_planApproval
-        coding_review -- "retry<br/>invalid plan, first time" --> coding_plan
-        coding_review -- "stopped<br/>invalid plan twice, model error" --> coding_report
-        coding_planApproval -- "approve" --> coding_implement
-        coding_planApproval -- "revise" --> coding_plan
+        coding_planApproval -- "approve" --> coding_setup
+        coding_planApproval -- "revise<br/>the user's comment" --> coding_revise
+        coding_revise -- "change<br/>the points for the next plan" --> coding_plan
+        coding_revise -- "question<br/>answered, same plan asked about again" --> coding_pause
+        coding_revise -- "stopped" --> coding_report
         coding_planApproval -- "deny" --> coding_report
-        coding_implement -- "tools" --> coding_implementTools
-        coding_implement -- "next<br/>step over (done or skipped), more left;<br/>or the same step after a reminder" --> coding_implement
-        coding_implement -- "verify<br/>all steps over" --> coding_verify
-        coding_implement -- "stopped<br/>over 15 turns in a step, model error" --> coding_report
-        coding_implementTools -- "implement<br/>all calls covered by the plan" --> coding_implement
-        coding_implementTools -- "revise<br/>a call isn't in the plan" --> coding_plan
-        coding_implementTools -- "stopped<br/>tool error" --> coding_report
-        coding_verify -- "passed" --> coding_designReview
-        coding_verify -- "fix<br/>failed, attempts left" --> coding_implement
-        coding_verify -- "failing<br/>failed, 3rd attempt" --> coding_report
+        coding_setup -- "done" --> coding_edit
+        coding_setup -- "stopped<br/>a setup command failed" --> coding_report
+        coding_edit -- "edit<br/>changes pending, or failed ones due<br/>for a second try" --> coding_edit
+        coding_edit -- "verify<br/>none pending" --> coding_verify
+        coding_edit -- "stopped<br/>model error" --> coding_report
+        coding_verify -- "passed" --> coding_report
+        coding_verify -- "fix<br/>failed at known places, attempts left" --> coding_fix
+        coding_verify -- "failing<br/>no place to repair, or the 3rd failed attempt" --> coding_report
         coding_verify -- "stopped<br/>tool error" --> coding_report
-        coding_designReview -- "fix<br/>issues found, 1st round" --> coding_implement
-        coding_designReview -- "done<br/>no issues, no guide, or 2nd round" --> coding_report
-        coding_designReview -- "stopped" --> coding_report
-        coding_report -. "a terminal kind: ends the skill" .-> coding_end(["END of skill-coding"])
-        coding_investigate -. "any node: over maxSteps<br/>(never a file's own stopped route)" .-> coding_stopped
+        coding_fix -- "verify<br/>sections repaired" --> coding_verify
+        coding_fix -- "revise<br/>a fix in a file the plan doesn't change<br/>(2 times at most)" --> coding_pause
+        coding_fix -- "stopped<br/>nothing could be changed, model error" --> coding_report
+        coding_report -- "done<br/>code was changed, or the user denied the plan" --> coding_answer
+        coding_report -- "unchanged<br/>no code changed (nothing applied, or all taken back)" --> coding_explain
+        coding_explain -- "done" --> coding_answer
+        coding_answer -. "a terminal kind: ends the skill" .-> coding_end(["END of skill-coding"])
+        coding_pickFiles -. "any node: over maxSteps<br/>(never a file's own stopped route)" .-> coding_stopped
         coding_stopped --> coding_end
     end
 
@@ -141,28 +161,34 @@ flowchart TD
     coding_end -- "skill-coding → agent" --> agent
     builder_finish -- "skillBuilder → agent" --> agent
 
+    tools -- "analysis asked for it" --> analyze
     tools --> agent
+    trusted_execute -- "analysis asked for it" --> analyze
     trusted_execute --> agent
-    trusted_verify -- "done<br/>nothing left" --> agent
+    trusted_verify -- "done<br/>nothing left<br/>(analysis asked for it: analyze)" --> agent
+    approval_execute -- "analysis asked for it" --> analyze
     approval_execute --> agent
-    approval_review -- "done<br/>everything denied" --> agent
+    approval_review -- "done<br/>everything denied<br/>(analysis asked for it: analyze)" --> agent
 ```
 
-The coding skill uses the generic nodes only for `start` and `stopped`: `toolStep` and
-`toolApproval` exist in it as in every skill but stay unused, because the coding kinds run their own
-tools (the plan check). Every file node of a skill has the same extra routes as in the "skill-*"
-subgraph above (tool calls → `toolStep`, over `maxSteps` → `stopped`); they are drawn once there.
-Every node, `next` and `on` entry of `coding.json` is drawn in the coding subgraph. The file maps
-every `stopped` outcome to `report` except `planApproval`'s, which has none to map; the automatic
-`stopped` is only reached when a step fails without a report or `maxSteps` is exceeded (drawn once,
-from `investigate`, but it applies to every node).
+The coding skill uses the generic nodes for `start` and `stopped` and for the free route (`work` is a generic
+`model` node with tools, `workDone` a `finish`): only there do `toolStep` and `toolApproval` run. **On the planned
+route the model never calls a tool in a job** (the graph reads, writes and runs; the model only answers with
+text). Every file node of a skill has
+the same extra routes as in the "skill-*" subgraph above (tool calls → `toolStep`, over `maxSteps` →
+`stopped`); they are drawn once there. Every node, `next` and `on` entry of `coding.json` is drawn in
+the coding subgraph. The file maps every `stopped` outcome to `report` except `planApproval`'s, which has
+none to map; the automatic `stopped` is only reached when a step fails without a report or `maxSteps` is
+exceeded (drawn once, from `pickFiles`, but it applies to every node).
 
 ## Nodes
 
 | Node | Graph | Defined in | What it does |
 |------|-------|------------|--------------|
 | `memory` | agent | `AgentGraph.summarize` | Summary memory, once per turn: if the messages after the current summary exceed `MEMORY_SUMMARY_TOKENS`, asks the model to fold the older ones (cut at a user message, keeping about `MEMORY_RECENT_TOKENS` verbatim) into the running summary. Updates `summary` / `summaryCovered`; otherwise no change. |
-| `agent` | agent | `AgentGraph.callModel` | Sends the system prompt (with the summary appended) + the messages after the summary, and the tool specs (the tools plus one per loaded skill, and `buildSkill`), to the model; appends its reply. After `MAX_AGENT_ROUNDS` (12) rounds of tool calls since the user's message (`State.agentToolRounds`; a skill's or job's own rounds don't count) it sends no tools and asks for an answer, and strips any calls the model makes anyway ("Stopped: too many tool rounds in one turn." when there is no text), so nothing is left open. |
+| `analyze` | agent | `AgentGraph.analyze`, `Analyzer`, `Analysis`, `AnalyzeMessage` | Once per user message, before the agent: sends the conversation as it is (a short constant system message first) with the functions `route(goal, edge)`, `ask_user(question, options)` and the read tools, `tool_choice: required`; the model answers with one function call (`Analysis`). `goal` is the request in one sentence; the call is exactly one of an **edge** (`route`: `agent`, or a job: `job_plan`, `job_study`, `job_free`), a **tool call** (`findParts`, `searchFiles`, `readSection`, `outline`, read-only; its result comes back as the tool message) or a **question** for the user (`ask_user`). What may be chosen is declared on the node with `@Offers` (edges with what each does and when to use it, tool names); `AnalyzeMessage.compose` builds the request from that list and the tool specs, and `Analysis.fromReply` checks the call against the same list (`Offered`). An unusable answer is returned to the model once as an error tool result (or a user note if it answered in text) (`Analyzer`); after two the node changes nothing and the agent goes on. A job edge appends a `startCodingJob(goal)` call, sets the fact `Objective` to the goal and stores the route in `codingRoute` (`plan`, `study`, `free`; `free` means the job picks files without a model call); the `agent` node then has nothing to ask (it returns no update while any call is open) and `route` sends the call to `skill-coding`. A tool edge appends the call (`analyzing` = 1, `analysisTools` + 1, at most `MAX_ANALYSIS_TOOLS` = 4 a turn) and the node `tools` / `trusted` / `approval` returns here (routers `afterTools`, `afterTrusted`, `afterApproval`) with the result in the next message (`tool_results`). A question is stored in `askQuestion` and goes to `ask`. |
+| `ask` | agent | `AgentGraph.ask`, `Agent.askAnalysisQuestion` | A pause (interrupt before the node, `ASK_PAUSE`): `Agent` shows the question and its options to the user through the `Approver` (an answer is an option plus an optional comment, or free text), puts the answer into the conversation as a user message (`askAnswer`, `askRounds` + 1) and the graph goes back to `analyze`. At most `MAX_ASKS` = 2 questions a turn; after that `ask` is no longer offered. |
+| `agent` | agent | `AgentGraph.callModel` | Sends the system prompt (with the summary appended) + the messages after the summary, and the tool specs (the tools plus one per loaded skill, and `buildSkill`), to the model; appends its reply. After `MAX_AGENT_ROUNDS` (12) rounds of tool calls since the user's message (`State.agentToolRounds`; a skill's or job's own rounds don't count) it sends no tools and asks for an answer, and strips any calls the model makes anyway ("Stopped: too many tool rounds in one turn." when there is no text), so nothing is left open. **An announcement without the call is asked again**: a plain answer that ends on a colon ("Let me make these changes:") is a promise a local model stopped before keeping, so `callModel` (`afterAnnouncement`) acts: where the text names a source or build file ("…changes to ChatWindow.java:") the promised work is a coding job, and the reply gets a `startCodingJob(goal)` call (goal as below) with its text kept; otherwise it asks once more with the answer and a short nudge appended (`AgentGraph.ANNOUNCED_NUDGE`, not stored): the reply's text stays and takes the calls the model now makes, or the model's new answer replaces it, and a new answer that still announces a change to a source file starts the job. **These two job starts happen at most once per turn** (`AgentGraph.jobStartedThisTurn`: a `startCodingJob` call after the user's last message, the model's or triage's, ends them): a job that ended without finishing says why in its report, and starting it again from the reply that follows would loop. **Coding work by hand becomes a job** (`CodingRedirect`, when the coding skill is loaded): if the reply's calls change an *existing* source or build file (`writeFile`, `editSection` of a `.java`, `.py`, `.html`, `package.json`, … file) by more than a tiny change (over 200 characters of new text), or it is the turn's second such change, and the reply has no `startCodingJob` call, the reply's calls are replaced by one `startCodingJob(goal)` call with the user's message as the goal (a short follow-up such as "implement it" brings the earlier user messages along, since a job sees only its goal; the model's text stays), and `route` sends it to `skill-coding` as if the model had asked for it. New files, text and Markdown files, tiny edits and all reading stay direct. |
 | `route()` | agent | `AgentGraph.route` | Picks the next step from the reply's unanswered tool calls (first match wins): `skill-coding` if any call is `startCodingJob` (the coding skill's tool; without a loaded `coding` skill it is an ordinary failing tool), `skillBuilder` if any call is `buildSkill`, `skill-<name>` for the first call that is a loaded skill's tool, `approval` if any call needs approval, `trusted` if any risky call is trusted, `tools` for safe calls only, `done` otherwise (which is also how the 12-round cap ends the turn). The `skill-*` routes are added by `@Subgraphs`, one per loaded skill. |
 | `tools` | agent | `AgentGraph.executeTools` | Runs calls to tools without `@RequiresApproval`. |
 | `trusted` | agent → subgraph | `TrustedGraph` | Risky calls whose `command` matches a trusted command (global + conversation settings); runs without pausing. |
@@ -193,7 +219,7 @@ A cancelled question and the step limit always go to the automatic `stopped`, wh
 
 | Kind | Fields (\* required) | Outcomes | What it does |
 |------|----------------------|----------|--------------|
-| `model` | `prompt`\*, `tools`, `output`, `format` (`text` / `json`), `thinking` (`shown` / `progress`) | `done` | One model turn. System prompt = the skill's description + a fixed preamble; user message = the rendered prompt. Offered only the tools it lists (minus the forbidden ones). A reply with tool calls goes to `toolStep` and back, the node's conversation growing each round; after `maxToolRounds` rounds it is asked once more without tools. The final text goes to `output`; with `format: json` it is parsed (a code fence is allowed), with one retry that names the parse error. |
+| `model` | `prompt`\*, `tools`, `output`, `format` (`text` / `json`), `thinking` (`shown` / `progress`), `maxTokens` (50 to 32000: the longest reply of this node; `skill-coding-study` has 1500), `effort` (`low` / `medium` / `high`: the reasoning effort of this node's requests; the agent's own default is `MODEL_REASONING_EFFORT`, low) | `done` | One model turn. System prompt = the skill's description + a fixed preamble; user message = the rendered prompt. Offered only the tools it lists (minus the forbidden ones). A reply with tool calls goes to `toolStep` and back, the node's conversation growing each round; after `maxToolRounds` rounds, or after a round whose calls all repeated earlier ones (`GenericKinds.repeatedOnly`: a loop), it is asked once more without tools. The final text goes to `output`; with `format: json` it is parsed (a code fence is allowed), with one retry that names the parse error. |
 | `askUser` | `question`\*, `choices`\*, `output` | one per choice | The graph pauses **before** it (node id `skill-<name>-<id>`); `Agent` renders `question`, asks the `Approver` and writes `skillAnswer` (`{node, choice, comment}`, `""` when dismissed). A missing or blank choice (dismissed), an answer for another node and an answer a node already used end the skill through the automatic `stopped` ("Stopped: cancelled by the user.", never the node's `on.stopped`); a choice that isn't offered is an error and takes `on.stopped`. The answer goes to `output` as `{choice, comment}`. |
 | `branch` | `cases`\* (`{when, then}` list) | each `then`, `otherwise` | The first case whose condition holds gives the outcome; none gives `otherwise`. Changes nothing. |
 | `set` | `values`\* (variable → template, `{increment: n}` or `{append: template}`) | `done` | Computes every value from the variables as they were before the node. |
@@ -207,32 +233,127 @@ built-ins `goal` / `folder` / `environment`, and what nodes set. Templates are `
 
 The coding job is the built-in skill `coding` (`src/main/resources/net/rka/ai/agent/skills/coding.json`),
 started by `startCodingJob(goal)` (its `tool` is pinned to that name; a signal tool that never runs
-itself). The file holds the wiring, prompts and limits; each node's kind (`coding.*`,
-`CodingKinds`) is implemented by a method of `CodingGraph`. Environment → investigate → plan → review →
-user approval of the plan → implement → verify → design review → report. The job has its own transcript
-(`codingMessages`); the conversation only sees the call and, from `report`, its result. The
-nodes are `skill-coding-<id>`; their tracing spans are `skill/coding/<id>`.
+itself). The file holds the wiring, prompts and limits; each node's kind (`coding.*`, `CodingKinds`) is
+implemented by a method of `CodingGraph`. Environment → pickFiles → gather → plan → user approval of the plan →
+setup → edit (once per file) → verify → fix (when it fails) → design review → report. A change that needs the existing code understood goes pickFiles → study → gather → plan. Open-ended work (finding out why a build fails, investigating a problem) goes pickFiles → work → workDone instead, with no plan: `work` is a model with tools under the usual rules for calls inside skills, and its report is the call's result. It is a **pipeline, not
+a conversation**: the model answers one question per call (which files, the plan, the new text of one
+section, what to repair, what is wrong with the design), the graph validates every answer, applies the changes
+and runs the commands, and every loop has a limit. The job keeps its data in state keys (the plan, a
+**ledger** of its changes), not in a transcript; the conversation only sees the call and, from `report`,
+its result. The nodes are `skill-coding-<id>`; their tracing spans are `skill/coding/<id>`. The design is in
+`docs/superpowers/specs/2026-10-26-coding-pipeline-design.md`.
 
 | Node | Kind | Defined in | What it does |
 |------|------|------------|--------------|
-| `skill-coding-environment` | `coding.environment` | `CodingGraph.environment` | No model. Takes the goal (the `start` node found the call), resets the job's state keys and loads the cached environment summary (`~/chat/environment.json`, stale after 7 days, probed again when stale; probes time out after 20 s). Its "Not run" answer for the reply's other calls is the coding job's. |
-| `skill-coding-investigate` | `coding.investigate` | `CodingGraph.investigate` | A model turn offered the read-only tools plus `runCommand`. At most 6 rounds of tool calls (`maxInvestigateRounds`), then the model is asked once more without tools, so it always ends with findings. Router `afterInvestigate`: `tools` (calls to run), `plan` (findings written), `stopped` (the model call threw). |
-| `skill-coding-investigateTools` | `coding.investigateTools` | `CodingGraph.investigateTools` | Runs only the fixed probe commands (exact match) and read-only tools, plus the user's trusted commands until web content came into the turn (before the job, in it, in an earlier job or skill). Everything else gets an error result naming the probes. Router `afterInvestigateTools`: `investigate`, or `stopped` (a tool run threw). |
-| `skill-coding-plan` | `coding.plan` | `CodingGraph.plan` | A model call without tools that answers with the plan JSON (steps with commands and file changes, plus verify commands). On a revision it also gets the previous plan, the user's comment and why the plan must change. Its streamed JSON is hidden ("Writing the plan… n characters"). Router `afterPlan`: `review`, or `stopped` (the model call threw). |
-| `skill-coding-review` | `coding.review` | `CodingGraph.review` | A second model call that checks the draft and answers with the corrected plan JSON (hidden: "Reviewing the plan"). Router `afterReview`: `approval` (valid plan), `retry` (invalid, first time), `stopped` (invalid `maxPlanAttempts` = 2 times, or the model call threw: the job reports). A revised plan with fewer steps than are already done is a plan error, like invalid JSON; so is one with exactly the done steps before verify ran (the pending step vanished). |
-| `skill-coding-planApproval` | `coding.planApproval` | `CodingGraph.planApproval` | The graph pauses **before** it (`interruptBefore`, node id `skill-coding-planApproval`); `Agent` recognizes the pause by the node's kind, shows the plan as a `PlanReview` (done and skipped steps marked, and for a revision a "Revised plan: <reason>" line, read before `implement` clears the reason), stores the answer in `codingDecision` / `codingComment` and resumes. The node records an approved plan in `codingApprovedPlan`. Router `afterPlanApproval`: `approve`, `revise`, `deny` (also any missing or unknown answer). An approved plan always leaves a step (or, after a failed verify, the fix) to implement. |
-| `skill-coding-implement` | `coding.implement` | `CodingGraph.implement` | A model turn on the current plan step (or, after a failed verify, on fixing it). A text answer ends the step, but a step that lists commands or file changes is only **done** when at least one of them ran successfully (`codingDoneItems`); otherwise the model is reminded once, naming them, and a second text answer marks the step **skipped** (`codingSkippedSteps`). Router `afterImplement`: `tools` (calls to check), `next` (step over, more left, or the same step after the reminder), `verify` (all steps over), `stopped` (more than `maxStepTurns` = 15 tool-calling turns in one step, or the model call threw). |
-| `skill-coding-implementTools` | `coding.implementTools` | `CodingGraph.implementTools` | The plan check (see below). All covered calls run with the job's command timeout, and the current step's items they carried out (result not an error, `runCommand` with exit code 0) are added to `codingDoneItems`; if any call isn't covered, none runs. Router `afterImplementTools`: `implement` (ran), `revise` (back to `plan` → `review` → the user; done steps are kept), `stopped` (a tool run threw). |
-| `skill-coding-verify` | `coding.verify` | `CodingGraph.verify` | No model. Runs the plan's verify commands. Router `afterVerify`: `passed` (all exit 0, or none planned; on to `designReview`), `fix` (failed, back to `implement` in fix mode), `failing` (failed on the `maxVerifyAttempts` = 3rd attempt of the job; re-plans don't reset the count), `stopped` (a run threw). Output showing a missing tool marks the environment cache stale. The "Verifying (attempt n/3)" progress event fires after this node, so it shows once the verify commands have finished. |
-| `skill-coding-designReview` | `coding.designReview` | `CodingGraph.designReview` | Once the build passes: the model reads the files the plan created or modified that a design guide is about (`.java` for the Java guide; up to 25 files / 60,000 characters) and checks them against the guide (`DesignGuides`: built-in `guides/java.md` plus the user's `~/chat/guides/<language>.md`, which wins), answering with a JSON list of issues stored as Markdown in `codingDesignIssues` (hidden: "Reviewing the design"). Router `afterDesignReview`: `fix` (issues in the first of `maxDesignRounds` = 2 rounds: back to `implement` in fix mode, limited to what the plan covers, then `verify` again), `done` (no issues, no guide applies, or the last round; remaining issues go into the report, they don't fail the job), `stopped`. A review that can't run, or whose answer isn't a JSON list, is noted as such (never reported as a pass) and never fails the job. Verify attempts after the design fix count from the review (`codingVerifyBase`): a fix that breaks a passing build gets its own 3 attempts, and if it still fails the report says the build passed before the design fixes. |
-| `skill-coding-report` | `coding.report` | `CodingGraph.report` | Builds the Markdown report (outcome, the last **approved** plan with done ✓ and skipped ✗ steps marked, a denied revision labelled "Revised plan (not approved)"; a revision that never parsed is named in the outcome line, last verify output) and answers the `startCodingJob` call with it, flagged as an error unless the job is Done with every step carried out ("Done with skipped steps: ..." is an error). A terminal kind: it has no outcome, and the subgraph ends after it. Every `stopped` route ends here with the reason from `codingStopReason`, e.g. "Stopped: model error: ... Steps 1 to 2 are done." |
+| `skill-coding-environment` | `coding.environment` | `CodingGraph.environment` | No model. Takes the goal (the `start` node found the call), resets the job's state keys and loads the cached environment summary (`~/chat/environment.json`, stale after 7 days, probed again when stale; probes time out after 20 s). It also walks the trusted folder once (`ProjectMap`: per folder its files with their line counts, build output, dependencies and hidden folders left out, at most 400 files / 8,000 characters) into `codingProjectMap`; the job's opening message, which every phase sends, includes it. Its "Not run" answer for the reply's other calls is the coding job's. |
+| `skill-coding-pickFiles` | `coding.pickFiles` | `CodingGraph.pickFiles` | A model call that answers `{"approach": "plan | study | free", "files": [...]}` from the project map: how the work goes (`free` = open-ended: it has to be found out as it goes, e.g. why a build or test fails, an investigation; `study` = a feature or change across several places or on top of existing behavior, so exact names and call paths must be read before planning; `plan` = a small, clear change, the default; kept in `codingApproach`), and the existing files the work belongs in, at most 6 (paths that don't exist are dropped; a bare file name that fits one file is accepted). An empty folder asks nothing; an empty list means only new files. An answer that isn't JSON is told back once (`codingPicks`); twice ends the job. Router `afterPickFiles`: `done` (plan), `study`, `free`, `stopped`. |
+| `skill-coding-gather` | `coding.gather` | `CodingGraph.gather` | No model. The outline of each picked file (`Outlines`: section id, kind, lines, md5; a file with very many sections shows its classes with part counts) into `codingCode`, at most 20,000 characters. |
+| `skill-coding-plan` | `coding.plan` | `CodingGraph.plan` | A model call that answers the plan JSON (`CodingPlan`: `changes` naming file, section id, action and intent, `setup` and `verify` commands, optionally `read`) from the outlines. **On a revision the graph keeps what is done** (`CodingGraph.keepDone`): the changes already made, as the approved plan listed them, come first (the ledger keeps them applied, they show ✓), and a change of the new plan that repeats one of them (same file, section and action, about the same intent) is dropped; the model is told the made changes and asked only for what is still to do, so a model that lists the whole job again doesn't make the job do it again. A plan that only asks to `read` sections gets them as text (no model, `codingRead`, at most `maxReadRounds` = 2 times) and is asked again. `PlanValidator` checks the plan against the folder: every file and section exists (a shortened section id becomes the full one; `add` naming a class's header means the class, `add` naming another part means `after` it), at most 12 changes, commands inside the folder that don't write files and don't chain with `&&` or `||` (Windows PowerShell 5 has neither: each command is its own entry, they run in order) (that is a change; a `gradlew` / `gradle` / `mvnw` / `mvn` command becomes the project wrapper's own invocation for this OS, e.g. `.\gradlew.bat build` in PowerShell, when the wrapper is in the working directory: `VerifyDefaults.normalize`), the project's build command filled in when `verify` is empty (`VerifyDefaults`). An unusable answer is told back with the reasons (`maxPlanAttempts` = 2 answers in all). The valid plan is saved as Markdown (the plan file). Its streamed JSON is hidden ("Writing the plan… n characters"). Router `afterPlan`: `approval`, `read`, `stopped`. |
+| `skill-coding-planApproval` | `coding.planApproval` | `CodingGraph.planApproval` | The graph pauses **before** it (`interruptBefore`, node id `skill-coding-planApproval`); `Agent` recognizes the pause by the node's kind, shows the plan as a `PlanReview` (made changes marked ✓, failed ✗, and for a revision a "Revised plan: <reason>" line, read before this node clears the reason), stores the answer in `codingDecision` / `codingComment` and resumes. The node records an approved plan in `codingApprovedPlan`, gives the ledger an entry per change (entries of changes already made are kept), and copies the existing files the plan changes (`codingBaseline`, a temporary folder deleted by `report`). Router `afterPlanApproval`: `approve`, `revise`, `deny` (also any missing or unknown answer). |
+| `skill-coding-revise` | `coding.revise` | `CodingGraph.revise` | A model call (no tools) that reads the user's comment on a plan against the plan and the outlines and code the job has, and answers `{"kind": "question" \| "change", "points": [...], "answer": "..."}`. A **question** is answered (`codingAnswer`, shown above the plan: `PlanReview.answer`), the comment is cleared and the user is asked about the same plan again: no new plan. A **change** gives `codingPoints` (one per line, the user's own terms): the plan step then puts them first, numbered, calls the old plan "what to change, not what to write again", and refuses a new plan whose changes equal the old one (the job says so in its report instead of showing the same plan as new). A reply that cannot be read counts as a change with the comment as its only point. Outcomes `change` → `plan`, `question` → the pause before `planApproval`, `stopped` → `report`. |
+| `skill-coding-setup` | `coding.setup` | `CodingGraph.setup` | No model. Runs the approved setup commands exactly as written, once per job (a revised plan doesn't run them again; `codingSetupDone`). A command that exits non-zero stops the job before anything changes. Router `afterSetup`: `done`, `stopped`. |
+| `skill-coding-edit` | `coding.edit` | `CodingGraph.edit` | (A change with an `anchor` — `before` / `after` in a method or constructor of a Java file — is applied by `JavaAnchors`: the anchor must name exactly one line of the method, the statement it starts is found by reading brackets and strings, the new statements are indented like it, and `JavaStructure` checks that the declarations did not change; `PlanValidator` checks the anchor when the plan is read, so a wrong one goes back to the planner.) Imports are added without a model after every change (`JavaImports`: a class name the new code uses and the file does not import is looked up among the project's classes, the JDK's exported packages and the class path's jars; added when exactly one class fits; the log shows `+ imports added` or `⚠ … uses X` for what cannot be told). Every applied change is written to disk at once (`flush`), so a job that stops leaves the files current. When every change is done and some failed while others were applied, each failed change is tried once more (`CodingGraph.retryFailed`, note `second try: …`; the router `afterEdit` goes back to `edit` for it); a patch on its second try is worked as a `replace` the model writes (`CodingGraph.effectivePlan`, worked out from the plan and the ledger on every pass: the approved plan is never changed): an import or member that came later may be what it needed. Makes the next pending change of the ledger together with the other pending changes to the same file (at most 6): ONE model call per file, with each change (action, section, intent, the section's current text; for `add` the class's outline; for `create` a note) and what was made so far in, and one code block per change out, in order (`CodeBlocks.all`; an answer without fences is not code). **The file's style wins**: the request carries what the file shows (`StyleNotes`: indentation, where braces go, whether methods have doc comments, counted from the text), an existing method of the class as an example for `add` (for a new file the first lines of a file of the same kind next to it), and the edit/fix prompts say the style of the surrounding code wins over the design guide, which is only for code where the file shows no convention (the design review reports only a rule the unchanged code of the same file follows). The number of blocks must equal the number of changes, else it is told back once and then every change has a call of its own. The blocks are applied one after the other to the file's text in memory and the file is written once; a change that does not apply stays pending and has a call of its own with the reason. `SectionEdit` applies it (`replace`, `add` placed where its kind belongs, `before`, `after`, and `start` / `end`: statements put right after the opening brace of a method or constructor body, after an explicit `super(...)` / `this(...)` call, or right before the closing brace, before a last `return` / `throw`; only for a method or constructor, checked by `PlanValidator`, so a check inside existing code needs no rewrite of the method); an edit that writes a part twice (the model repeated a neighbour) is refused, a change whose text leaves the file unchanged is refused ("your text changes nothing"), and Java text that starts with a statement (`if (…)`, `return`, a call, an assignment) given for `before` or `after` a method or constructor is applied as the `start` or `end` of its body (statements next to a method can only mean inside it); the same text for `add`, or for replacing a method/constructor/field, is refused. Whether text is a method or statements is decided by the JDK parser (`JavaStructure.readsAsStatements`: a call such as `System.out.println(x);` reads as a method to the lenient reader, but is a statement). Such text would land outside any method, so the model is told to write a whole member instead (`CodingGraph.startsWithStatement`). `delete` needs no model. An answer with no code or an edit that can't be applied is told back once (`maxEditAttempts` = 2 answers per change); then the change is marked **failed** and the job goes on. Router `afterEdit`: `edit` (more pending), `verify`, `stopped` (the model call threw). Its streamed text is hidden ("Writing code… n characters"). |
+| `skill-coding-verify` | `coding.verify` | `CodingGraph.verify` | No model. Runs the approved verify commands (a plan without any gets the project's own build command from `VerifyDefaults`; Java files with no build tool are compiled together into a temporary folder, `javac -d …/verify-javac`, so a broken build is never "verified") (`runCommand`, the job's timeout; the working directory must be inside the folder). For a failed run the `file:line` positions of its output (`BuildErrors`) are mapped to the section that holds each line (`codingFixes`). Router `afterVerify`: `passed` (all exit 0, or none planned), `fix` (failed, places to repair, attempts left), `failing` (failed on the `maxVerifyAttempts` = 3rd attempt, or nothing in the output says where to look), `stopped`. Output showing a missing tool marks the environment cache stale. **A design fix can't make things worse**: when the build fails right after one, the plan's files go back to the copies taken when the build passed (`codingGood`), the commands run once more, and the report says the design issues are still open (`codingDesignUndone`). |
+| `skill-coding-fix` | `coding.fix` | `CodingGraph.fix` | Repairs `codingFixes` (from verify or the design review): one model call per section (at most 4 sections, all problems of a section in one call): the section's text and its messages in, its new text out (the answer `SKIP` leaves a section as it is: the failing line was only a symptom). An answer that equals the code there is not applied; the call is made once more with the code of the methods the message names (`calleeSources`) and the words that the answer fixed nothing. A finding in a file the plan doesn't change is never edited silently: the plan gets a change for it and the job goes back to the user (`revise`, at most 2 times, `codingRevisions`). When nothing could be changed the job stops with a report instead of verifying the same failure again. Router `afterFix`: `verify`, `revise`, `stopped`. |
+| `skill-coding-study` | `model` | `GenericKinds.Model` | **Locate** (`pickFiles` answered `study`): a generic `model` node (low effort) offered only read tools: `outline`, `readSection`, `where` (a name's definitions and uses), `searchFiles`, `findFiles`, `listFiles`. The request is in the user's words, so it looks for the names the code uses, reads the parts that matter **whole** with `readSection` (for "like X" requests X as well) and answers in at most three lines where the change belongs. The answer is not the plan's source: `CodingGraph.gather` collects every `readSection` of this step that came back `complete` (`readWhole`) and gives the plan the code of those parts as they are now ("Code the research read, whole parts"), so the plan is made from code, not from notes about it. The three lines still go into the opening message of the later phases (`CodingGraph.notes`). |
+| `skill-coding-work` | `model` | `GenericKinds.Model` | **Free route** (`pickFiles` answered `free`): no plan, no plan approval. A generic `model` node offered `outline`, `readSection`, `editSection`, `readFile`, `listFiles`, `findFiles`, `searchFiles`, `writeFile` and `runCommand` (`tools`), `maxToolRounds` = 40 rounds, its answer in the variable `result`. Its prompt gives the goal, the folder and the environment and asks for a short report at the end. The generic rules for calls inside skills apply (`toolStep`, `toolApproval`): only listed tools, risky calls such as commands that are not trusted ask the user. No `on.stopped` is mapped, so a model error ends the skill through the automatic `stopped`. |
+| `skill-coding-check` | `coding.check` | `CodingGraph.check` | **Free route**, no model. Checks what the work changed, not the folder: the files the work's writing calls changed (`changedPaths`, from the transcript; none changed = no check). The build command is the one of the nearest project above a changed file (`VerifyDefaults.detectFor`: the wrapper, gradle, mvn, npm, cargo, go, run in that project's folder, at most 3 projects); without a build file the trusted folder is compiled as a small plain Java project only when it holds at most 200 Java files (hidden folders, `build`, `target`, `out`, `node_modules` not counted: a home folder is not one). The commands are the program's, never the model's, so they need no approval. It sets the skill variable `check` to "passed", "failed (…): the end of the output", "failed … but its messages name none of the changed files … so it was left alone" (not repaired: it was broken before, or by something else) or why nothing was checked. Router `afterCheck`: `passed`, `none` (nothing changed or known to build, tool missing, failure elsewhere), `failing` (a failure that names a changed file). |
+| `skill-coding-repair` | `model` | `GenericKinds.Model` | **Free route**, only after a failed check: a generic `model` node with the editing tools of `work` (no `runCommand`), whose prompt has the goal, the first report (`result`) and the build output (`check`); it fixes what the messages point at and its short report replaces `result`. |
+| `skill-coding-recheck` | `coding.check` | `CodingGraph.check` | The same check once more after the repair; whatever it finds goes to `workDone`, so the free route repairs at most once. |
+| `skill-coding-workDone` | `finish` | `GenericKinds.Finish` | Answers the `startCodingJob` call with the model's report from `result`, the build check (`check`) plus the note that the job is over (the agent must not carry on changing code). |
+| `skill-coding-explain` | `coding.explain` | `CodingGraph.explain` | Only after a job that **changed no code** (nothing applied or everything taken back; not when the user denied the plan). A model call (no tools) over the request and the report: why nothing was changed, in plain words, and two or three things the user can do about it, ending with the question of which they want (`codingExplanation`). A model that cannot be reached leaves the explanation out. |
+| `skill-coding-answer` | `coding.answer` | `CodingGraph.answer` | Answers the `startCodingJob` call with the report (and the explanation under "Why nothing was changed, and what the user can do"), told to the agent to pass on shortly and ask what to do; for a job that is over the agent must not carry on changing code. A job that succeeded also adds the text for the user itself (the outcome line and one line per change, `CodingGraph.doneText`): the `agent` node then makes no model call (the last message is an answer already) and the turn ends. Every other end goes to the agent. |
+| `skill-coding-report` | `coding.report` | `CodingGraph.report` | Builds the Markdown report (outcome, the last **approved** plan with made ✓ and failed ✗ changes marked, a denied revision labelled "Revised plan (not approved)", the design review, the last verify output), saves it as the plan file and sets `codingOutcome` (`success`, `failed`, `unchanged`). It routes to `explain` when no code changed and to `answer` otherwise. The old behavior of answering the `startCodingJob` call moved to `answer`. Previously it answered the call with the report plus a note that the job is over (the agent must not carry on changing code), flagged as an error unless the job is "Done: every change is made and verified". A terminal kind: it has no outcome, and the subgraph ends after it. Every `stopped` route ends here with the reason from `codingStopReason`, e.g. "Stopped: no valid plan after 2 attempts: ...". **A job whose changes were not shown to build ends by putting the files back** (`CodingGraph.rollBack`; verify still failing after the last attempt, a repair that could change nothing, or any stop or error after edits without a passing verify): the plan's files are copied back from the baseline made at approval, files a `create` change made are removed, and the report says so ("The files are back as they were before the job (n restored, m created files removed)") and marks no change as made; if the copies are missing or a file can't be written, the report says the files keep the changes. |
 
-The file's limits: `maxSteps` 600 (a skill with coding kinds may set up to 1000; other skills up to
-200), `maxToolRounds` 8, `maxInvestigateRounds` 6, `maxStepTurns` 15, `maxVerifyAttempts` 3,
-`maxDesignRounds` 2, `maxPlanAttempts` 2. The coding kinds route to `stopped` once
-`codingStopReason` is set; the built-in file maps every `stopped` to `report`, except
-`planApproval`, which has no `stopped` route, so a job always answers its call. An exception inside
-a step is caught by the skill graph (`skillStopReason`) and takes the same route.
+The file's limits: `maxSteps` 300 (a skill with coding kinds may set up to 1000; other skills up to
+200), `maxToolRounds` 12 (the free route's `work`), `maxReadRounds` 2, `maxPlanAttempts` 2, `maxEditAttempts` 2, `maxVerifyAttempts` 3,
+`maxDesignRounds` 1. The coding kinds route to `stopped` once `codingStopReason` is set; the built-in file maps
+every `stopped` to `report`, except `planApproval`, which has no `stopped` route, so a job always answers its
+call. An exception inside a step is caught by the skill graph (`skillStopReason`) and takes the same route.
+
+> **The `java*` tools are not offered to the model** (`ToolRegistry.defaultTools`; `JAVA_TOOLS=true` offers them again): it struggled with them. `JavaTools` and the workspace stay in the code; the workspace still backs `listFiles`, `findFiles`, `searchFiles`, `readFile`, `writeFile`, `patchFile` (now also for Java files) and the outline tools, and the plan's own edits. The `study` and `work` nodes of `coding.json` list only the generic tools.
+
+## Small changes: grounded, and written as patches
+
+A change of a few lines used to cost the same as a big one: files guessed from names, a plan made from outlines, and the model writing the whole section again. Two changes:
+- **Likely places.** `gather` (no model) also finds the members the goal is about (`Locator`: the words of the goal against the names and the code of every method, constructor and field of the Java workspace) and adds their code, with the outline id to use, to what the plan is made from ("Likely places for this work"). The planner has seen the code it changes and the code it should match.
+- **Files that are not Java count too.** `Locator.findInTextFiles` cuts the text files of the folder (not the build output or other skipped folders) into blocks and adds the blocks that use several words of the goal, without an id (a patch of that file without a section). A picked file that is not Java and shorter than 3000 characters is shown whole in the plan's context, so its patch copies real lines.
+- **The `patch` action.** A change may carry `patch`: hunks (lines that stay, `-` lines, `+` lines; `TextPatch`) for a few lines inside a section (a member of a Java file; for another file the whole file when no section is named). `PlanValidator` tries the hunks on the file while the plan is being made: a hunk that fits nowhere or twice, in a section that exists, becomes a `replace` of that section that the model writes (the patch and why it did not fit are in the intent; often the model wrote the text as it will be, not as it is), so one wrong patch does not send the whole plan back; a patch without a section is still told back; the `edit` step applies patches in plan order **without a model call** (`CodingGraph.applyPatches`, then the usual structure and variable checks of a Java change), and a patch that no longer fits fails like any change. The approval window shows the hunks.
+- **Test with the real model.** `CodingEval` (not part of the build: `$env:CODING_EVAL = "true"; .\gradlew.bat :test --tests "*CodingEval*"`) runs six simple tasks on scratch projects against the model of `.env` and writes `build/eval/coding-eval.md` with pass or fail, seconds and the final files.
+
+## The task and the first decision
+
+`analyze` (table above) decides the first step of a turn. A job edge replaces the fact "Current task: …" (`Objective`, in the state key `facts`, so it is shown in the Memory window and can be edited there) with the goal of the analysis, and the job's goal is that goal. The older `CodingTriage` (three answers `CODING`, `CONTINUE`, `OTHER`) is kept only as the baseline of the routing evaluation (`RoutingEval`, `gradlew runRouting`, cases in `evals/routing/cases.json`).
+The goal of a job that `callModel` or the hand-edit net starts (not the analysis) is built by `CodingRedirect`: a message of 60 characters or more is the goal alone.
+For a short one ("plan that", "implement it") the goal is the message plus what happened just before: the nearest earlier
+answer of the assistant (a recommendation, up to 3,000 characters) or coding job (its goal and report), and while that is too little to tell what it is about (under 200
+characters) the one before it, at most three (`CodingRedirect.earlierWork`). The kept task is added only when that is too little; without any earlier work it is the
+earlier user messages (`CodingRedirect.goal`). So "plan that" after a recommendation means the recommendation, not the first request of the conversation. The hand-edit safety net (`CodingRedirect.startCall`) also covers
+`patchFile` and the Java edit tools.
+
+## Grooming the context
+
+`ContextGroom.apply` builds what the model sees from the conversation, every time a request is made (`AgentGraph.agentMessages`, the model node of a skill), so the context is groomed after each answer for the next question; the transcript the user reads is not touched and the same messages always give the same text (the model server's cache stays valid). The user's own messages stay whole. What the program said instead of the model (the "a coding job ran in this turn" note, "too many tool rounds", the empty-reply note) becomes "(this turn ended without an answer)", so the model does not imitate it. The model's last two answers stay; older long answers keep their first 300 characters. Then earlier turns' tool results are shortened (`SummaryMemory.compactEarlierTurns`) and reads that were done again or made out of date go (`StaleReads`). Messages keep their places, which summary memory needs. Three more pieces keep the record true:
+- **Job ledger** (`JobLedger`): before each model call of the `agent` node, a note of the program lists the coding jobs of earlier turns, each as its goal (from the `startCodingJob` call) and the first line of its report (the outcome the graph wrote: "Done: …", "Stopped: …", "Still failing after …"), the latest four. It is what the model is told about the jobs instead of what it once wrote about them. In the turn where a job just reported, the report itself is the last message and the ledger is left out.
+- **Name check** (`NameCheck`): a class-like name in backticks in a final answer that is nowhere in the project's Java code (`JavaWorkspace.mentions`) and that the user did not write is named under the answer ("[Not found in the project: …]"). The note is part of the stored answer, so the user and every later turn see it.
+- **Health and reset** (`ConversationHealth`, `ContextReset`, the chip "● Context" in the window): the health reads the last 40 messages for turns the program had to end (limits, empty replies, refused edits), answers with names not in the project, coding jobs that stopped, many failed tool calls and the share of the model's context the conversation fills: OK / watch / drifting, with the reasons in the tooltip and the window. "Reset context" sets the conversation's summary (the existing summary memory, `ConversationSummary`) to a text made by the program: the task, the user's latest messages in their own words and the job ledger, covering all messages so far. Nothing the model wrote is in it; the transcript on screen is unchanged.
+
+## Fresh information
+
+The context holds as little file text as possible, and what it holds is kept true.
+
+- **Whole parts.** Every read returns a whole unit and says what it read. `readSection` answers `[path · id · kind · lines a–b of N · md5 … · complete]` and the code; a part of more than 30,000 characters is not cut: nothing is returned but its smaller parts (id and lines), each of which can be read whole. `searchFiles` and `where` place their matches in the smallest part of the file that holds them (a Java method, constructor or field; a Markdown heading; a block of lines) as `path · id · lines (kind)` with up to three matching lines, so a hit says which unit to read. `readFile` reads a file whole only when it is small (about 150 lines) or has no parts (data, logs); a bigger code file gives its outline, and line ranges stay for files without parts.
+- **The built-in coding skill is a short line**: plan, approve, set up, edit each change, build, repair, report. Three kinds are not part of it but stay available to any skill (a user skill can wire them in; the tests run the full variant, `src/test/resources/coding-full.json`): `coding.planCheck` (a model check of the plan: approach, existing mechanism ignored, a question for the user), `coding.intent` (after a passing build: OK, GAP back to `plan`, or ASK the user at `planApproval`) and `coding.designReview` (a review of the new code against the design guide, one repair round). Their outcomes are `ok / revise / ask`, `done / gap / ask` and `fix / done`. What the short line keeps from them without a node: `plan` itself sends a plan back when it creates a Java class that nothing uses (`unusedCreations`; on the last attempt the plan goes to the user with the remark "look at this before you approve", the job does not stop), the verify command is the project's own build (a bare `javac` in a project with a build file becomes it), and a build that fails in more than 3 files the plan doesn't change stops the job instead of planning repairs for them.
+- **A plan is a list, so that a refusal is cheap.** The model writes about 11 tokens a second, so a plan with code in it (4,700 tokens once: 8 minutes) that is then refused costs minutes. The plan prompt says: no code, one short intent per change; `PlanValidator` keeps a patch only up to 8 changed lines (`MAX_PATCH_LINES`; a longer one becomes a `replace` that carries the sketch as guidance for the edit step), accepts 13 to 20 changes with the remark "big plan" (`HARD_MAX_CHANGES`; more is refused; the remark and the dead-class remark go to the user as the plan's reason, "look at this before you approve"), and refuses a setup command that changes the build tool's wrapper. `CodingGraph.plan` limits the reply to `PLAN_MAX_TOKENS` (3,500): a reply that fills it is told to be much shorter, as one of the plan attempts. The log says why a plan was refused ("✗ plan refused …").
+- **Each phase of a job gets the parts it uses** (`JobPhase`, `JobContext`). The model calls the graph makes itself (`pickFiles`, `plan`, `revise`, `edit`, `fix`, `designReview`, `intent`, `explain`) used to share one opening with the goal, folder, environment, file list, design guide and research notes. Now each phase sends only its parts, in the same order: `pickFiles` goal, folder, file list; `plan` and `revise` add the environment and the notes (6,000 characters); `edit` has goal, folder, the design guide and the notes cut to 3,000; `fix` goal, folder and the notes (3,000); `designReview` goal, folder and the guide; `intent` and `explain` only goal and folder. The phase's own message carries its material (the section, the build's messages, the ledger). Every call logs the sizes, e.g. `ctx edit: goal 0.1k · folder 0.1k · guide 5.2k · notes 3.0k = 8.7k chars (opening)`.
+- **Old reads of a tool loop shrink.** `RollingResults` (applied in the model node of a skill, and to the transcript `ToolCallRunner.withoutRepeats` compares against): the results of reads (`readFile`, `readSection`, `outline`, `listFiles`, `findFiles`, `searchFiles`, `findParts`, the `java*` reads) from before the last 4 rounds shrink to a note with the call, its size and the first 400 characters of the result ("returned N characters, shortened … It began: …"); results up to 600 characters, command output and errors stay. Nothing is shortened while the results together are no more than 60,000 characters (`RollingResults.MAX_HELD_CHARS`): rewriting an old message makes the model server read everything after it again.
+- **Doubles and outdated reads leave.** `StaleReads` (applied where a request is built: `AgentGraph.agentMessages` and the model node of a skill) replaces the result of a read by a one-line note when the same read was done again later, or when the file (or the type's file) was changed by a later edit, patch or write. Results under 1,500 characters stay. The result is replaced only when a later message makes it wrong or double, so every request after that has the same text and the model server's cache stays valid.
+- **A ledger of what was shown.** The state key `knowledge` (`Knowledge`: one line per file, "path TAB version") is updated by every tool node (`ToolCallRunner.runUnanswered` and `runInSkill`) with the versions of the files the calls touched, after they ran: for a Java file the hash of each member's lines, for another file size, modified time and number of lines. Before each model call of the `agent` node the tracked files are compared with how they are now (a look at the tracked files; the Java workspace has them in memory): changes are named in one note at the end of the request ("`src/Ledger.java`: changed Ledger.run(); added Ledger.pause()"), not stored, and the ledger is brought up to date, so a change is said once. What a call changed itself is not a change.
+- **The job's outlines.** `gather` records the versions of the picked files; `plan` builds the outlines again, without a model, when one of them changed since (a revised plan after an edit, a file edited while the plan waited).
+
+## Loop check
+
+Every node of every graph (the agent, the approval and trusted subgraphs, the skill and coding subgraphs) runs inside the node wrapper
+(`NodeTracing.wrap`), which also runs `LoopWatch` on its result: the state key `loopWatch` holds, per node, a fingerprint of the
+node's last result (message texts and tool calls without their ids) and how many times in a row it came. The fourth equal result of a
+node stops the run with a `LoopDetectedException`, which `Agent.run` turns into a failed turn that keeps what was done. Nodes without
+updates are not counted. The `agent` and `tools` nodes are not watched: their loop ends by itself after `MAX_AGENT_ROUNDS` with an
+answer. This is a backstop besides the limits of each loop (verify attempts, plan revisions, tool rounds per step, the run's step limit)
+and the check inside a model call (`RepeatGuard`: a model writing the same lines over and over).
+
+## The Java workspace
+
+In a **Java project** (the trusted folder holds `.java` files) the Java files are held in memory by a `JavaWorkspace`
+(`net.rka.ai.tools.code.java`, one per folder from `JavaWorkspaces.shared()`, opened the first time a tool or the coding job
+asks, watched by a background thread). It is not a graph node but the layer under the file tools and the coding job:
+
+| Part | What it does |
+|------|--------------|
+| **Units** | Each file is a `JavaUnit`: its text (possibly newer than the file), its outline, the types read from it (`JavaSourceReader` → `JavaClass`, with members in source order, comments, annotations, record components, enum constants), the dotted names it uses, and the `DiskStamp` (modified time, size) of the file when it was read. Every `JavaClass` read holds the **complete text of its file** (`source()`, the same for nested types) and every entity knows its lines in it: `startLine()` / `endLine()` of each type, field, method, constructor, initializer, comment and enum constant (from its comment or annotations to its closing brace or `;`; 1-based, both included), and `Span`s for the header comment, the `package` and each import. `lines(member)` returns those lines of the text; a type built by hand has no text and lines 0. Immutable; every change replaces the unit and reads its types again, so the lines always match the text. A file that doesn't parse keeps its text and outline and the reason (`parseError`). |
+| **Indexes** | Hash maps: qualified name → type, simple name → qualified names, word → units using it. Updated per changed unit. `javaFind`, `find`, `typesNamed` are lookups, not searches. |
+| **References** | Every dotted name in a unit's declarations and code (`Ledger.parse`, `Map.Entry`, `@Foo`) is resolved the way Java resolves it (types of the same file, single imports, the same package, imports on demand, a nested type after its outer one, fully qualified names) into a `Reference(fromType, fromMember, toType, toMember, kind)` with kind `SUPERTYPE`, `ANNOTATION`, `DECLARATION` (signatures) or `BODY`. Kept per unit and by the type pointed at (`usagesOf`, `referencesOf`, `usersOf`); when a type appears or goes only the units that use its name are resolved again. A call through a variable (`ledger.parse()`) is not resolved to a type (that needs the types of local variables); `possibleCallers` finds those by name among the types that use the type. |
+| **Changes in memory** | **Every change is checked against the structure (`JavaStructure`) before it is accepted**, in `edit`, `setText` and the coding job's `apply`: the result must still read as Java, and it must hold exactly the declarations it held, minus those of the part that was replaced, plus those the new text declares (nothing declared twice in a type). A change that fails is refused with what is wrong and nothing is changed, so the model corrects the change instead of repairing a broken file. `edit` (a `SectionEdit` on the text, checked against the md5), `setText` (replace or create), `delete`. The file is not touched. Each change re-reads the unit and updates the indexes and references. |
+| **The file system** | `sync()` walks the folder (one walk, stats only; `build`, `.git` and other skipped or hidden folders left out), reads the files whose stamp differs, adds new files, drops deleted ones. The watcher calls it about 40 ms after the last event, tool calls (`ProjectFiles.fresh()`) and every change call it first, and a read calls it when the last look is older than a second. A file that changed on disk **while its unit had changes in memory is a conflict**: both are kept. |
+| **Writing** | `flush()` writes the changed units (new files with their folders, deleted ones removed) and takes their new stamps, so the watcher's event for our own write changes nothing. A conflicting unit is left alone and named; `flush(true)` writes over it. `discardAll()` drops the changes in memory and reads the files again. |
+
+**Who goes through it** (`ProjectFiles` decides: a `.java` file of a Java project is memory, every other file is disk):
+`outline`, `readSection`, `editSection`, `readFile`, `writeFile`, `listFiles`, `findFiles` and `searchFiles` of the file tools (a listing, a glob and a search show the Java files as they are in memory: new files appear, deleted ones don't, a search finds text not written yet), and `CodingGraph` (reading sections, applying changes, style samples, repair context, finding the section of a compiler message).
+
+**When memory is written to the files** ("the end", and everything that reads the files):
+- before every `runCommand` (`TerminalTools`, and `CodingGraph.run` for the job's setup and verify commands: a conflict stops the command, with the file names);
+- before the coding job copies the baseline at plan approval, before a plan is checked against the files, and when the design review keeps a good copy;
+- at the end of the job (`report`), unless the job took its changes back; files that could not be written because they changed on disk meanwhile are named in the report;
+- at the end of every turn (`Agent.run`, in its `finally`), and when the app closes.
+
+When every failed verify command failed because its tool is not installed ("command not found"), the changes were not shown to be wrong: nothing is taken back and the job reports "Done, but not verified". An anchored `before` / `after` whose text declares a method is placed next to the section like a new member.
+
+A job that ends with its build not shown to pass takes its changes back (`rollBack`): the changes in memory are discarded first, then the files are restored from the baseline, then the workspace takes in the restored files.
+
+**Tools** (`JavaTools`, registered with the others): `javaProject` (packages and types, files with changes in memory, conflicts), `javaFind` (a type by simple, qualified or partial name, with its file, supertypes and member signatures), `javaUsages` (which types and members use a type; with `member`, which members may call it), `javaFlush` (write now; `force` over conflicts) `javaDiscard`, and the create/read/update/delete tools that work on the parsed structure (`JavaMembers` finds a member by `name`, `name(int,String)`, `<init>`, `{}` / `static{}` or `Inner.name`; `JavaWorkspace.changeLines` applies the change to the member's lines and `JavaStructure` checks it): `javaOutline` (a type or file as the structure sees it: each member with the name the other tools take and its lines), `javaGraph` (the call graph, see below), `javaRead` (a type or one member), `javaAdd` (new members at the end of a type, indented like its others), `javaReplace` (one member; empty code deletes it), `javaDelete` (a member, or the whole type, and its file when it is alone in it), `javaImport` (add or remove an import) and `javaCreate` (a new file). **Sections** (`JavaOutliner`): the sections of a Java file for `outline`, `readSection` and `editSection` are built from the parsed types (the same lines as every Java tool); only a file that does not read as Java falls back to the older text scan. A test compares both on every Java file of the project. **Patches** (`TextPatch`, the hunk reading and placing for any text; tool `patchFile` for files that are not Java; `JavaPatch`, tool `javaPatch`, for a member of a Java type): a partial change to a member is written as hunks (context lines, `-` lines, `+` lines), found by their context and removed lines (compared without indentation, which must match exactly one place), applied to the member as the file has it, and checked like every change (declarations, variables). The block tools' optional `expect` is the same protection for an address. `JavaWorkspace` and every Java tool refuse a file that is not `.java` (`JavaWorkspace.requireJava`; `javaOutline` says to use `outline`). **Statements** (`JavaBlocks`, `JavaBlockEdit`): a member's body is read with the JDK's parser into `Statement`s (kind, lines with the comments above, `Part`s such as then / else / body / catch, declared `Variable`s with their scope, the names read and written, the `Call`s with their receiver chain; lambdas are parts of the statement that holds them), on first use and kept per text. `javaBlocks` (the tree with addresses), `javaReadBlock` (one statement and the variables visible to it), `javaReplaceBlock`, `javaInsertBlock` and `javaDeleteBlock` work on addresses; `JavaBlockEdit` refuses a change whose statement list would not hold what it should, that leaves a variable undeclared that the removed code declared, or declares a name twice where both are visible. `javaFlush`, `javaDiscard`, `javaAdd`, `javaReplace`, `javaDelete`, `javaReplaceBlock`, `javaInsertBlock`, `javaDeleteBlock`, `javaPatch`, `javaImport` and `javaCreate` are `@WritesFiles` (so after a coding job in the same turn the agent can't call them: `NO_CHANGES_AFTER_JOB`); `javaProject`, `javaFind`, `javaUsages`, `javaOutline`, `javaGraph`, `javaBlocks`, `javaReadBlock` and `javaRead` are safe. The `study` and `work` nodes of the coding skill list them. The coding job's `gather` adds to each picked Java file the cross-references of its types ("is used by: …; uses: …").
+
+**The call graph** (`JavaCallGraph`, built per `javaGraph` call from the workspace in a fraction of a second; no state kept): the methods, constructors and initializers of every type with the members their code calls. A call is resolved from what the code says about its receiver: a local variable, parameter or field with a declared type, a type name (static call), `this` / `super`, `new T(...)`, or the result of an earlier call in the chain (the declared return type); an unqualified call looks in the type, its supertypes and the outer types. A call of an interface or abstract method also reaches the methods of the same name and parameter count in all subtypes of the project. Not followed (and counted): calls on the JDK or libraries, on a `var` from a call or a lambda parameter, reflection. `javaGraph` starts at the `main` methods or at a type or member, follows calls or callers up to 8 levels and prints a tree with file and line (a member shown already is marked ↺).
+
+Not kept in memory: non-Java files (they stay with the file tools), a second type of the same qualified name (the first is kept), references through variables.
 
 ## Safe, trusted and guarded calls
 
@@ -241,7 +362,7 @@ skills' tools, are routed to their subgraphs before any of this):
 
 - **safe** (read-only, never asks): tools with neither `@RequiresApproval` nor `@WritesFiles`:
   date, math, `systemInfo`, `sshHosts`, `webSearch`, `fetchPage`, `listFacts`, and the reading
-  file tools `workFolder`, `listFiles`, `findFiles`, `readFile` (which refuse any path outside
+  file tools `workFolder`, `listFiles`, `findFiles`, `searchFiles`, `readFile`, `outline`, `readSection` (which refuse any path outside
   the conversation's trusted folder, and any path inside the skills folder).
 - **trusted** (runs via the `trusted` subgraph), only while **no web content is in the turn**:
   - a `@RequiresApproval` call whose `command` matches a trusted command (global settings plus the
@@ -249,14 +370,13 @@ skills' tools, are routed to their subgraphs before any of this):
     (`; & | < > `` ` `` $ ( ) { }`, newline);
   - a `@WritesFiles` call whose whole tool is trusted with a `tool:<name>` entry, e.g. `tool:writeFile`.
 - **needs approval**: every other `@RequiresApproval` call (`runCommand`, `runRemoteCommand`) and
-  every other `@WritesFiles` call (`writeFile`, `createDirectory`, `movePath`, `copyFile`,
+  every other `@WritesFiles` call (`writeFile`, `editSection`, `createDirectory`, `movePath`, `copyFile`,
   `deletePath`, `remember`, `forget`).
 
 **Web content in the turn** (`State.webContentInTurn`): a result from a `@WebContent` tool
-(`webSearch`, `fetchPage`) appears after the latest user message, in any coding job's transcript of
-this turn (`codingMessages`), or in any skill's transcript of this turn (`skillMessages`, the
-skills' model replies and tool results; a run starts it empty), so a page a job or skill read keeps
-counting after it has ended. Web pages can carry instructions aimed at the model, so from then until
+(`webSearch`, `fetchPage`) appears after the latest user message, or in any skill's transcript of this
+turn (`skillMessages`, the skills' model replies and tool results; a run starts it empty), so a page a
+skill read keeps counting after it has ended (a coding job reads no web: its model has no tools). Web pages can carry instructions aimed at the model, so from then until
 the user's next message, nothing that changes files or runs commands happens without asking. The rule
 lives in `ToolRegistry.needsApproval` / `isTrusted` and is applied through `State.needsApproval` /
 `State.isTrusted` by the router, `trusted/verify`, `approval/review`, `Agent.askApproval` and the
@@ -279,63 +399,54 @@ every tool call, unchanged.
 - File tools refuse paths inside `~/chat/skills`: skill files change only through the builder's
   Save.
 
-**Inside a coding job** (`coding.*` kinds) these rules are replaced by the plan check
-(`CodingPlan.covers`, applied by `skill-coding-implementTools`, and by `skill-coding-verify` for the
-verify commands):
+**The free route** (`pickFiles` → `work` → `check` → [`repair` → `recheck`] → `workDone`) has no plan to approve, but its build is checked by the graph and repaired once; the model works with the tools of a generic `model` node (listed in the table above), and the rules above keep it safe: only listed tools, the trusted folder, and every risky call (a command that is not trusted, web content) asks the user as in the main graph. After a job the agent itself changes no files in the same turn (`NO_CHANGES_AFTER_JOB`).
 
-- The user approves the plan, not each call. A call runs when the approved plan covers it, or
-  when it is one of the user's trusted commands (global + conversation, `tool:` entries
-  included) and no web content has come in. Read-only tools always run.
-- `runCommand` is covered by an **exact** match of the command text **and** the working
-  directory, with no wildcards; a planned command may run any number of times. Only spaces and
-  tabs are normalized (`CodingPlan.normalizeCommand`): a newline separates two statements, so
-  `a\nb` never matches a planned `a b`. (`TrustedCommands` keeps its own normalization; it rejects
-  newlines anyway.)
-- File tools are covered by the plan's file entries, **only inside the trusted folder**
-  (`WorkFolder.resolveInside`, so `..`, absolute paths and symlinks out of it are not covered):
-  `create` / `modify` cover `writeFile`, `createDirectory` and the target of `copyFile` (whose
-  source needs no entry, since it is only read, but must be inside the trusted folder too); `move`
-  covers the source of `movePath` (its target needs a `create` entry); `delete` covers
-  `deletePath`. A path ending in `/` is a folder entry covering everything under it, but never
-  the deletion or move of the folder itself.
-- If any call of a reply isn't covered, **none** runs: each gets a "not in the approved plan"
-  result and the job goes back to `plan` → `review` → the user.
-- Never offered and never run in a job, whatever the plan or the trusted list says:
-  `startCodingJob`, `buildSkill`, every skill's tool, `sshHosts`, `runRemoteCommand`, `remember`,
-  `forget`.
-- Missing or malformed arguments (null included) are never covered: the check fails closed.
-- **Web content** (a `@WebContent` result anywhere in the turn: before the job, in it, in an
-  earlier job or skill of the turn): from then on the user's trusted commands and `tool:` entries
-  stop counting. `investigateTools` then runs only the fixed probes, and `implementTools` only
-  plan-covered calls. Before web content, the user's trusted commands and `tool:` entries still
-  apply in a job. Web content does not shrink what the plan covers: the user approved those items
-  explicitly.
-- Limits (in `coding.json`): 6 investigate rounds, 15 model turns per step, 3 verify attempts per
-  job, 2 design rounds, 2 plan attempts, 600 node visits (`maxSteps`). The graph's recursion limit is
-  the larger of 1000 and, for each loaded skill, `maxSteps × (2 × maxToolRounds + 2) + 100`, so a
-  skill always stops at its own `maxSteps`, with an answer, before LangGraph4j stops the run (the
-  default 25 is far too low). The plain agent ↔ tools loop is capped separately at 12 tool rounds
-  per turn (`MAX_AGENT_ROUNDS`).
-- Plan JSON that doesn't parse gets one retry, then the job reports. A revised plan with fewer
-  steps than are already done is a plan error too, and so is one with exactly the done steps
-  while verify hasn't run (the pending step vanished; after a failed verify it is a valid fix plan).
-- Plan commands must terminate: the plan and review prompts forbid dev servers and watch modes
-  (`npm run dev`, `gradle bootRun`, `vite`, ...).
-- **No silent skipping**: a step that lists commands or file changes is done only when at least
-  one of them ran successfully; otherwise the model is reminded once, then the step is marked
-  skipped, shown as "✗ skipped" in the plan and reported as "Done with skipped steps: ...",
-  flagged as an error.
-- **Stopping early**: a model call or tool run that throws, the second invalid plan and a step
-  over its turns write `codingStopReason`; every router (except `afterPlanApproval`) has a
-  `stopped` route to `report`, so the job always answers its call.
+**Inside a planned coding job** (`coding.*` kinds) none of this applies, because **the model has no tools there**: its
+requests carry no tool specification and its answers are text that `CodingGraph` parses (a list of files, the plan
+JSON, a code block, a list of issues). The graph does everything else, so there is no path from the model to a
+change or a command:
+
+- The user approves the plan, not each call. The plan names the sections to change (file, section id, action) and
+  the setup and verify commands; the graph applies exactly those: it reads the section, asks the model for its
+  new text and writes it (`SectionEdit`), and it runs the commands exactly as written (through the tool runner,
+  with the job's timeout). Nothing else runs.
+- Everything stays **inside the trusted folder** (`WorkFolder.resolveInside`, so `..`, absolute paths and symlinks
+  out of it fail): checked when the plan is validated and again when a change is applied or a command's working
+  directory is used. A command in a plan may not write files (`>`, `tee`, `sed -i`, `Set-Content` ... are
+  refused: a file change is a change), so the approval of the changes can't be bypassed by a command.
+- `setup`, `edit`, `fix` and `verify` run only when the current plan is the one the user approved last
+  (`notApproved`); a changed plan, even a fix that needs another file (it becomes a revised plan the user sees),
+  is approved first. The validator rejects any skill file in which those kinds can be reached without passing a
+  `coding.planApproval` node's `approve`.
+- A repair of a "cannot find symbol", "cannot be applied", "no suitable" or "incompatible types" gets javac's `symbol:` / `location:` / `required:` lines, the outline of the file and its imports (`CodingGraph.existingMembers`), so an invented name becomes a real one. `CodingGraph.unknownClasses` (`JavaUnknownTypes`) only logs a Java change that uses a class found nowhere (not imported, not in the project, not in `java.lang`): a later change of the plan may add its import. A fix only touches sections of files the plan changes. A problem in any other file goes back to the user as a
+  revised plan, at most `MAX_REVISIONS` (2) times (`codingRevisions`), then the job stops with a report.
+- The user's trusted commands and `tool:` entries are not used in a job: commands run only from the approved
+  plan. A job reads no web page (no tools), so it can't bring web content into the turn.
+- **Nothing is taken for code that isn't**: the edit and fix steps need their code in a write_code call (or a code block); prose, an
+  apology or a question is told back once and never written into a file. An edit that declares a part the file
+  already has is refused for the same reason.
+- Limits (in `coding.json`): 2 read rounds, 2 plan attempts, 2 edit attempts per change, 3 verify attempts per
+  job, 1 design round, 300 node visits (`maxSteps`). The graph's recursion limit is the larger of 1000 and, for
+  each loaded skill, `maxSteps × (2 × maxToolRounds + 2) + 100`, so a skill always stops at its own `maxSteps`,
+  with an answer, before LangGraph4j stops the run (the default 25 is far too low). The plain agent ↔ tools loop is
+  capped separately at 12 tool rounds per turn (`MAX_AGENT_ROUNDS`).
+- Plan commands must terminate: the plan prompt forbids dev servers and watch modes (`npm run dev`,
+  `gradle bootRun`, `vite`, ...).
+- **No silent skipping**: a change that can't be made is marked failed in the ledger, shown as "✗ failed" in the
+  plan and reported as "Done with failed changes: ...", flagged as an error.
+- **Stopping early**: a model call or command that throws, no valid plan, a failed setup command or a fix that can
+  change nothing write `codingStopReason`; every router (except `afterPlanApproval`) has a `stopped` route to
+  `report`, so the job always answers its call.
 
 The plan approval can't be wired around: the validator rejects any skill with coding kinds in which
-`coding.implement`, `coding.implementTools` or `coding.verify` can be reached from `start` or from a
-`coding.plan` / `coding.review` node without passing a `coding.planApproval` node's `approve`
-outcome, or in which a path from `start` reaches another coding node before `coding.environment`;
-and the kinds enforce the approved plan at run time whatever the wiring.
+`coding.setup`, `coding.edit`, `coding.fix` or `coding.verify` can be reached from `start` or from a
+`coding.plan` node without passing a `coding.planApproval` node's `approve` outcome, or in which a path from
+`start` reaches another coding node before `coding.environment`; and the kinds enforce the approved plan at run
+time whatever the wiring.
 
 ## State keys
+
+`AgentGraph.State` also holds the analysis: `askQuestion` (JSON of the question and options while the graph waits at `ask`), `askAnswer`, `askRounds` (questions asked this turn), `analyzing` (1 while the analysis waits for the result of a tool call), `analysisTools` (tool calls it made this turn) and `codingRoute` (`plan`, `study` or `free`, set by a job edge, read by `CodingGraph.pickFiles`).
 
 `AgentGraph.State`: `messages` (append-only chat history), `approvals` (call id →
 approved, written by `Agent` on resume; the main approval, a skill's `toolApproval` and nothing else
@@ -373,32 +484,35 @@ resets them, so `""` and `0` mean "not set"):
 
 The coding job's keys (used only by the coding kinds' nodes; `skill-coding-environment` resets them,
 so `""` and `0` mean "not set"): `codingGoal`, `codingCallId` (the `startCodingJob` call to answer, a
-copy of `skillCallId`),
-`codingEnvironment`, `codingMessages` (the job's own transcript; an appender that keeps
-duplicates) and `codingStart` (where the current job begins in it), `codingFindings`,
-`codingPlan` (JSON), `codingDecision` (`approve` / `revise` / `deny`, written by `Agent` on
-resume) and `codingComment` (the Revise comment), `codingRevisionReason` (why the graph asked
-for a new plan), `codingStep` (steps over, done or skipped), `codingStepTurns`, `codingAttempts`
-(verify runs), `codingVerifyOutput`, `codingReport`, `codingPlanErrors`, `codingApprovedPlan`
-(JSON of the plan approved last, what the report shows), `codingDoneItems` (the plan items that
-ran successfully, one `step<TAB>item` per line), `codingSkippedSteps` (comma-separated step
-numbers), `codingStepReminded` (1 once the current step got its reminder), `codingStopReason`
-(why the job stopped early; set means every router takes `stopped`) and `codingPlanFile` (the
-job's Markdown plan file under `~/chat/plans`, chosen by `environment`, written by `review` with
-each plan waiting for approval and by `report` with the final report). The design review adds
-`codingDesignIssues` (its latest findings as a Markdown list), `codingDesignRounds` (reviews run) and
-`codingVerifyBase` (verify attempts used before the last review, so a design fix that breaks the build
-gets its own 3 attempts);
-plan, plan review and implement also get the design guide in their prompts.
+copy of `skillCallId`), `codingEnvironment`, `codingProjectMap` (the folder's files with line counts),
+`codingPicks` (the picked files, one per line), `codingApproach` (`free` for open-ended work, else ""), `codingCode` (their outlines), `codingRead` (sections the plan
+asked to read, as text), `codingReadRounds` and `codingReadPending` (1 while the plan waits to be asked again),
+`codingPlan` (JSON; "" while the plan asks to read), `codingPlanRounds` (plans made: what shows a resumed pause
+changed something), `codingDecision` (`approve` / `revise` / `deny`, written by `Agent` on resume) and
+`codingComment` (the Revise comment), `codingRevisionReason` (why the graph asked for a new plan),
+`codingApprovedPlan` (JSON of the plan approved last, what the job works by and the report shows),
+`codingLedger` (JSON: per change pending / applied / failed with a note), `codingSetupDone`, `codingAttempts`
+(verify runs), `codingVerifyOutput`, `codingFixes` (JSON: the sections to repair with what is wrong, from verify
+or the design review), `codingRevisions` (times a fix went back to the user), `codingReport`,
+`codingStopReason` (why the job stopped early; set means every router takes `stopped`) and `codingPlanFile`
+(the job's Markdown plan file under `~/chat/plans`, chosen by `environment`, written by `plan` with each plan
+waiting for approval and by `report` with the final report). The design review adds `codingDesignIssues` (its
+findings as a Markdown list), `codingDesignRounds` (reviews run), `codingBaseline` (the folder with the copies
+the design review diffs against), `codingGood` (copies of the plan's files while a design fix is tried; "" otherwise)
+and `codingDesignUndone` (1 when the fix broke the build and was undone); the edit and fix steps also get the design guide in their prompts.
 
 The conversation's long-term **facts** are the state key `facts` (one `id<TAB>text` per line).
 `Agent` sets it at the start of a run and lists the facts in the system prompt; every tool node
 (`tools`, `trusted/execute`, `approval/execute`, and a skill's `toolStep` / `toolApproval` when a
 listed memory tool ran) returns the facts as `remember` / `forget` left
 them (`ToolCallRunner.runUnanswered` / `runInSkill`), and `Agent.run` reads them from the final state.
+The same two methods break repeat loops: a call whose result equals that of an identical call (same
+tool, same arguments) earlier in the turn (`messages` / `skillMessages` since the last user message)
+is answered with a note telling the model to use the earlier result, and a call failing with the same
+error as an identical one gets that error plus a note not to repeat it (`ToolCallRunner.withoutRepeats`). In a skill's `model` node a round whose results are all such repeat notes, or all refusals by the user ("Denied: …"), ends tool use for that visit: the model answers instead of proposing another command (`GenericKinds.repeatedOnly`). A turn the user stops can end the graph with a call still open; `Agent.run` answers it with an error result, so the saved conversation stays valid. `FileTools.SKIPPED_FOLDERS` also holds `traces` and `conversations`, and `evals/results` is skipped, so the file list and searches show the project, not the agent's own output; `readSection` reads a part whole only up to 8,000 characters, a bigger one (a whole class) gives its parts.
 The router, `trusted/verify` and `approval/review` all decide with `state.needsApproval(...)`,
-which combines `trustedCommands` with whether web content is in the turn (derived from `messages`,
-`codingMessages` and `skillMessages`, not stored). Every node that runs tools passes `workFolder` to
+which combines `trustedCommands` with whether web content is in the turn (derived from `messages`
+and `skillMessages`, not stored). Every node that runs tools passes `workFolder` to
 them as the `workFolder` invocation parameter: file tools are confined to it, and terminal commands
 start there.
 
@@ -460,8 +574,8 @@ the file format for users; this section is how the graph is built.
   the user").
 - **Limits**: `maxSteps` (node visits; default 40, 1 to 200, or up to 1000 with coding kinds) and
   `maxToolRounds` (default 8, 1 to 50) in every file; kinds add their own named limits (the coding
-  kinds' `maxInvestigateRounds`, `maxStepTurns`, `maxVerifyAttempts`, `maxDesignRounds`,
-  `maxPlanAttempts`, 1 to 100). A skill that loops stops at `maxSteps` with an error result and the
+  kinds' `maxReadRounds`, `maxPlanAttempts`, `maxEditAttempts`, `maxVerifyAttempts`,
+  `maxDesignRounds`, 1 to 100). A skill that loops stops at `maxSteps` with an error result and the
   conversation keeps the call answered.
 - **Reload** (`Agent.reloadSkills`): loads the files again and rebuilds the agent graph and the tool
   list. It runs between turns only: after a turn in which the builder saved a skill, and from the
@@ -470,14 +584,14 @@ the file format for users; this section is how the graph is built.
   without any skill do the skills that were loaded before stay in use.
 - **What is shown**: tracing spans are `skill/<name>/<id>` and `skillBuilder/<step>`. The window and
   CLI show each skill's progress as `<skill> · <node> · step n/max` (its node visits against
-  `maxSteps`; a coding job's as "Planning", "Step n/m", ...; the builder's as "Skill builder · draft").
-  A skill's model replies and tool results are passed on as they finish (`onJobMessage`, with the
-  transcript and the skill's name), marked as the skill's, and not saved: the window labels their
-  notes with the skill's name (a coding job's stay "Coding job") and keeps each transcript's tool
-  chips apart (`coding:` / `skill:` key prefixes). Streamed text is hidden by
+  `maxSteps`; a coding job's as "Finding the code", "Planning", "Change n/m", "Verifying", ...; the builder's
+  as "Skill builder · draft"). A skill's model replies and tool results are passed on as they finish
+  (`onJobMessage`, with the skill's name), marked as the skill's, and not saved: the window labels their
+  notes with the skill's name. A coding job passes on none: it answers in data (the plan, the ledger), so
+  its phases are the progress. Streamed text is hidden by
   node kind (`LiveChannel.hiddenWorkOfKind`, found through the node index so a node may be called
-  anything): the `coding.plan` and `coding.review` kinds' plan JSON ("Writing the plan",
-  "Reviewing the plan"), the design review's issue list ("Reviewing the design"), and a `model`
+  anything): the `coding.pickFiles`, `coding.plan`, `coding.edit` and `coding.fix` kinds' answers ("Choosing files",
+  "Writing the plan", "Writing code", "Fixing code"), the design review's issue list ("Reviewing the design"), and a `model`
   node with `"thinking": "progress"` (`<skill>: <node>`). The builder's `draft` ("Drafting the
   skill") and the `memory` step's summary are hidden too (`LiveChannel.hiddenWork`).
 
@@ -500,7 +614,10 @@ only what wasn't shown yet; the job's and skills' own messages are shown but not
 Token-level output (a reply still being generated, a command still running) can't go through the
 state, which changes only when a node finishes: the streaming model (`StreamingChatModelAdapter`)
 and the tool runner send it to `LiveChannel`, which `Agent` points at the turn's listener. That is
-display only; the graph still gets each complete reply and result.
+display only; the graph still gets each complete reply and result. A connection that breaks before the
+server sent a token ("header parser received no bytes", "closed": the server restarted or dropped the request)
+is asked once more after 2 s by the adapter, so a hiccup of the model server doesn't end a job; a break after
+the first token, or an answer of the server itself, is not retried.
 What is shown follows one rule (`LiveChannel.hiddenWork` and `hiddenWorkOfKind`, used for streamed
 tokens and finished messages alike; `NodeTracing` tells the channel which node runs): thinking, the
 agent's words, tool calls and results, and a job's findings and step summaries are shown; the plan and

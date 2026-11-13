@@ -1,0 +1,13 @@
+{
+  "id": "lambda-insert",
+  "description": "Add a statement inside a lambda body, after an existing statement",
+  "fixture": "shop",
+  "prompt": "In Order.print, inside the forEach lambda, after the line that prints the line variable, also print \"price \" followed by the item's price.",
+  "expectCodingJob": true,
+  "checks": [
+    { "type": "command", "command": "javac -d out src/shop/*.java && java -cp out shop.Main", "outputContains": "price 150" },
+    { "type": "command", "command": "javac -d out src/shop/*.java && java -cp out shop.Main", "outputContains": "price 1200" },
+    { "type": "command", "command": "javac -d out src/shop/*.java && java -cp out shop.Main", "outputContains": "pen x4" },
+    { "type": "fileContains", "path": "src/shop/Order.java", "text": "items.forEach(item -> {" }
+  ]
+}

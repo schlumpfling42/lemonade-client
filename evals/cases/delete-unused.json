@@ -1,0 +1,13 @@
+{
+  "id": "delete-unused",
+  "description": "Delete a member and nothing else",
+  "fixture": "shop",
+  "prompt": "Remove the unused method legacyTotal from Order.",
+  "expectCodingJob": true,
+  "checks": [
+    { "type": "fileNotContains", "path": "src/shop/Order.java", "text": "legacyTotal" },
+    { "type": "fileContains", "path": "src/shop/Order.java", "text": "public int total()" },
+    { "type": "fileContains", "path": "src/shop/Order.java", "text": "public int count()" },
+    { "type": "command", "command": "javac -d out src/shop/*.java && java -cp out shop.Main", "outputContains": "total 1620" }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "id": "question-code",
+  "description": "A question that needs reading the code; answered, nothing changes",
+  "fixture": "shop",
+  "prompt": "Which method prints the items of an order, and what does it print for each item?",
+  "expectCodingJob": false,
+  "checks": [
+    { "type": "answerContains", "text": "print" },
+    { "type": "answerMatches", "regex": "name|x\\d|quantity" },
+    { "type": "fileUnchanged", "path": "src/shop/Order.java" },
+    { "type": "fileUnchanged", "path": "src/shop/Main.java" }
+  ]
+}

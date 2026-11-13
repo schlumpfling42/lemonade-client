@@ -14,55 +14,73 @@ import java.util.Optional;
 import java.util.Set;
 
 /**
- * The coding job's node kinds: one per step of a coding job, implemented by {@link CodingGraph}
- * (which keeps the job's state keys, plan check, plan files and design guides). The built-in skill
- * {@code coding} ({@code coding.json}) wires them into the job; a user's {@code coding.json} may wire,
- * limit and prompt them differently, but every kind enforces its own rules whatever the wiring.
+ * The coding job's node kinds: one per step of the job's pipeline, implemented by {@link CodingGraph} (which keeps the
+ * job's state keys, plan files and design guides). The built-in skill {@code coding} ({@code coding.json}) wires them
+ * into the job; a user's {@code coding.json} may wire, limit and prompt them differently, but every kind enforces its
+ * own rules whatever the wiring.
  *
  * <pre>
  *   kind                    | fields   | outcomes (+ stopped)        | method
  *   ------------------------+----------+-----------------------------+---------------------------------
- *   coding.environment      |          | done                        | environment (goal, fresh keys)
- *   coding.investigate      | prompt*  | tools, plan                 | investigate
- *   coding.investigateTools |          | investigate                 | investigateTools (probes only)
- *   coding.plan             | prompt*  | review                      | plan
- *   coding.review           | prompt*  | approval, retry             | review
+ *   coding.environment      |          | done                        | environment (goal, fresh keys, project map)
+ *   coding.pickFiles        | prompt*  | done, study, free           | pickFiles (model: the files, and how the work goes)
+ *   coding.gather           |          | done                        | gather (graph: their outlines)
+ *   coding.plan             | prompt*  | approval, read              | plan (model: the plan; graph: validates, reads)
  *   coding.planApproval     |          | approve, revise, deny       | planApproval (⏸ pauses before)
- *   coding.implement        | prompt*  | tools, next, verify         | implement
- *   coding.implementTools   |          | implement, revise           | implementTools (the plan check)
- *   coding.verify           |          | passed, fix, failing        | verify
- *   coding.designReview     | prompt*  | fix, done                   | designReview
- *   coding.report           |          | none: ends the skill        | report (answers the call)
- *   (* required: the step's instructions to the model, sent as its system prompt)
+ *   coding.revise           | prompt   | change, question            | revise (reads the comment on a plan)
+ *   coding.setup            |          | done                        | setup (graph: the approved commands)
+ *   coding.edit             | prompt*  | edit, verify                | edit (model: a section's new text; graph applies)
+ *   coding.verify           |          | passed, fix, failing        | verify (graph: the build; failures to sections)
+ *   coding.fix              | prompt*  | verify, revise              | fix (model: a section's new text; graph applies)
+ *   coding.planCheck        | prompt   | ok, revise, ask             | planCheck (graph: classes nothing uses; model: approach and coverage)
+ *   coding.intent           | prompt   | done, gap, ask              | intent (model: does the change do what was asked?)
+ *   coding.designReview    | prompt*  | fix, done                   | designReview (model: issues in the changed code)
+ *   coding.report           |          | done, unchanged             | report (graph: the report and how the job ended)
+ *   coding.explain          | prompt   | done                        | explain (model: why no code changed, what to do)
+ *   coding.answer           |          | none: ends the skill        | answer (answers the call)
+ *   (* required: the step's instructions to the model, sent with its material in the user message)
  * </pre>
- * The outcomes are the routes of the former {@code CodingGraph} routers; each kind routes to
- * {@link NodeKind#STOPPED} once {@code codingStopReason} is set, which the built-in file maps to
- * {@code report}. The limits come from the skill file's {@code limits} ({@link CodingGraph.Limits}); each
- * kind declares the one it reads ({@link NodeKind#limitNames}): investigate {@code maxInvestigateRounds},
- * review {@code maxPlanAttempts}, implement {@code maxStepTurns}, verify {@code maxVerifyAttempts},
- * designReview {@code maxDesignRounds}. A skill with coding kinds may set {@code maxSteps} up to 1000.
- * The validator also requires that implement, implementTools and verify are only reached through
- * {@code coding.planApproval}'s {@code approve} (from start and from every plan and review node), and
- * that {@code coding.environment} comes before every other coding node ({@link SkillValidator}); at run
- * time implementTools and verify only work by the plan the user approved last.
+ * The model never calls a tool inside a job: the graph reads, writes and builds, the model answers with text of a known
+ * shape. Each kind routes to {@link NodeKind#STOPPED} once {@code codingStopReason} is set, which the built-in file maps
+ * to {@code report}. The limits come from the skill file's {@code limits} ({@link CodingGraph.Limits}); each kind
+ * declares the ones it reads ({@link NodeKind#limitNames}): plan {@code maxReadRounds} and {@code maxPlanAttempts}, edit
+ * {@code maxEditAttempts}, verify {@code maxVerifyAttempts}, designReview {@code maxDesignRounds}. A skill with coding
+ * kinds may set {@code maxSteps} up to 1000. The validator also requires that setup, edit, fix and verify are only
+ * reached through {@code coding.planApproval}'s {@code approve} (from start and from every plan node), and that
+ * {@code coding.environment} comes before every other coding node ({@link SkillValidator}); at run time they only work
+ * by the plan the user approved last.
  */
 public final class CodingKinds {
 
     public static final String ENVIRONMENT = "coding.environment";
-    public static final String INVESTIGATE = "coding.investigate";
-    public static final String INVESTIGATE_TOOLS = "coding.investigateTools";
+    public static final String PICK_FILES = "coding.pickFiles";
+    public static final String GATHER = "coding.gather";
     public static final String PLAN = "coding.plan";
-    public static final String REVIEW = "coding.review";
+    /** Reads the user's comment on a plan before the plan is made again: a question is answered, a change becomes a list of points. */
+    public static final String REVISE = "coding.revise";
     /** The plan approval: the graph pauses before it, {@code Agent} asks the user about the plan. */
     public static final String PLAN_APPROVAL = "coding.planApproval";
-    public static final String IMPLEMENT = "coding.implement";
-    /** Runs the calls the approved plan covers; reachable only through {@link #PLAN_APPROVAL}'s {@link #APPROVE}. */
-    public static final String IMPLEMENT_TOOLS = "coding.implementTools";
+    /** Runs the approved setup commands; reachable only through {@link #PLAN_APPROVAL}'s {@link #APPROVE}. */
+    public static final String SETUP = "coding.setup";
+    /** Makes the approved changes; reachable only through {@link #PLAN_APPROVAL}'s {@link #APPROVE}. */
+    public static final String EDIT = "coding.edit";
     /** Runs the plan's verify commands; reachable only through {@link #PLAN_APPROVAL}'s {@link #APPROVE}. */
     public static final String VERIFY = "coding.verify";
+    /** After free work (no plan): runs the folder's own build command, with no model; the result is the variable {@code check}. */
+    public static final String CHECK = "coding.check";
+    /** Repairs what verify or the design review found; reachable only through {@link #PLAN_APPROVAL}'s {@link #APPROVE}. */
+    public static final String FIX = "coding.fix";
+    /** Once the build passes: does the change do what the user asked? One check, from the request and the diff. */
+    public static final String INTENT = "coding.intent";
+    /** Checks the plan before the user sees it: a class nothing uses, the wrong approach, a point of the request left out. */
+    public static final String PLAN_CHECK = "coding.planCheck";
     public static final String DESIGN_REVIEW = "coding.designReview";
-    /** Ends the job with its report, the answer to the call. */
+    /** Writes the job's report and says how it ended: {@code done}, or {@code unchanged} when no code was changed. */
     public static final String REPORT = "coding.report";
+    /** Tells the user why a job changed no code and asks what they want to do; reachable only through {@link #REPORT}'s {@code unchanged}. */
+    public static final String EXPLAIN = "coding.explain";
+    /** Ends the job: the report (and the explanation) is the answer to the call. */
+    public static final String ANSWER = "coding.answer";
     /** The plan approval's outcome after the user approved the plan. */
     public static final String APPROVE = CodingGraph.APPROVE;
 
@@ -110,9 +128,9 @@ public final class CodingKinds {
                 - "tool": the built-in coding skill's tool is pinned: keep "tool" exactly as in the current file, \
                 or leave it out; never change it.
                 - Every path from "start" to another coding node passes through a coding.environment node, and \
-                coding.implement, coding.implementTools and coding.verify are only reached through a \
-                coding.planApproval node's "approve" outcome (from start and from every coding.plan and \
-                coding.review node), so nothing runs by a plan the user didn't approve.
+                coding.setup, coding.edit, coding.fix and coding.verify are only reached through a \
+                coding.planApproval node's "approve" outcome (from start and from every coding.plan node), so \
+                nothing changes by a plan the user didn't approve.
                 - A stopped outcome usually goes to the report node, so the job always answers with a report.
                 """.formatted(SkillValidator.MAX_CODING_STEPS, SkillValidator.MAX_EXTRA_LIMIT));
         return out.toString();
@@ -144,14 +162,17 @@ public final class CodingKinds {
                         return Optional.of(CodingGraph.NOT_RUN); // "a coding job started", as before skills
                     }
                 },
-                new Kind(INVESTIGATE, List.of("tools", "plan"), true, setup,
-                        CodingGraph::investigate, (state, limits) -> CodingGraph.afterInvestigate(state)).withLimits(CodingGraph.Limits.INVESTIGATE_ROUNDS),
-                new Kind(INVESTIGATE_TOOLS, List.of("investigate"), false, setup,
-                        (job, state, prompt) -> job.investigateTools(state), (state, limits) -> CodingGraph.afterInvestigateTools(state)),
-                new Kind(PLAN, List.of("review"), true, setup,
-                        CodingGraph::plan, (state, limits) -> CodingGraph.afterPlan(state)),
-                new Kind(REVIEW, List.of("approval", "retry"), true, setup,
-                        CodingGraph::review, (state, limits) -> CodingGraph.afterReview(state)).withLimits(CodingGraph.Limits.PLAN_ATTEMPTS),
+                new Kind(PICK_FILES, List.of("done", "study", "free"), true, setup,
+                        CodingGraph::pickFiles, (state, limits) -> CodingGraph.afterPickFiles(state)),
+                new Kind(GATHER, List.of("done"), false, setup,
+                        (job, state, prompt) -> job.gather(state), (state, limits) -> "done"),
+                new Kind(PLAN, List.of("approval", "read"), true, setup,
+                        CodingGraph::plan, (state, limits) -> CodingGraph.afterPlan(state))
+                        .withLimits(CodingGraph.Limits.READ_ROUNDS, CodingGraph.Limits.PLAN_ATTEMPTS),
+                new Kind(REVISE, List.of(CodingGraph.CHANGE, CodingGraph.QUESTION), true, setup,
+                        CodingGraph::revise, (state, limits) -> CodingGraph.afterRevise(state)),
+                new Kind(PLAN_CHECK, List.of("ok", "revise", "ask"), true, setup,
+                        CodingGraph::planCheck, (state, limits) -> CodingGraph.afterPlanCheck(state)),
                 new Kind(PLAN_APPROVAL, List.of(CodingGraph.APPROVE, CodingGraph.REVISE, CodingGraph.DENY), false, setup,
                         (job, state, prompt) -> job.planApproval(state), (state, limits) -> CodingGraph.afterPlanApproval(state)) {
                     @Override
@@ -159,17 +180,27 @@ public final class CodingKinds {
                         return true; // Agent asks the user (Approver.reviewPlan) and writes codingDecision
                     }
                 },
-                new Kind(IMPLEMENT, List.of("tools", "next", "verify"), true, setup,
-                        CodingGraph::implement, (state, limits) -> CodingGraph.afterImplement(state)).withLimits(CodingGraph.Limits.STEP_TURNS),
-                new Kind(IMPLEMENT_TOOLS, List.of("implement", "revise"), false, setup,
-                        (job, state, prompt) -> job.implementTools(state), (state, limits) -> CodingGraph.afterImplementTools(state)),
+                new Kind(SETUP, List.of("done"), false, setup,
+                        (job, state, prompt) -> job.setup(state), (state, limits) -> CodingGraph.afterSetup(state)),
+                new Kind(EDIT, List.of("edit", "verify"), true, setup,
+                        CodingGraph::edit, (state, limits) -> CodingGraph.afterEdit(state)).withLimits(CodingGraph.Limits.EDIT_ATTEMPTS),
                 new Kind(VERIFY, List.of("passed", "fix", "failing"), false, setup,
                         (job, state, prompt) -> job.verify(state), CodingGraph::afterVerify).withLimits(CodingGraph.Limits.VERIFY_ATTEMPTS),
+                new Kind(CHECK, List.of("passed", "none", "failing"), false, setup,
+                        (job, state, prompt) -> job.check(state), (state, limits) -> CodingGraph.afterCheck(state)).withWrites("check"),
+                new Kind(FIX, List.of("verify", "revise"), true, setup,
+                        CodingGraph::fix, (state, limits) -> CodingGraph.afterFix(state)),
+                new Kind(INTENT, List.of("done", "gap", "ask"), true, setup,
+                        CodingGraph::intent, (state, limits) -> CodingGraph.afterIntent(state)),
                 new Kind(DESIGN_REVIEW, List.of("fix", "done"), true, setup,
-                        CodingGraph::designReview, CodingGraph::afterDesignReview).withLimits(CodingGraph.Limits.DESIGN_ROUNDS),
-                new Kind(REPORT, List.of(), false, setup,
-                        (job, state, prompt) -> job.report(state), (state, limits) -> {
-                    throw new IllegalStateException("a report node has no outcome"); // terminal: never asked
+                        CodingGraph::designReview, (state, limits) -> CodingGraph.afterDesignReview(state)).withLimits(CodingGraph.Limits.DESIGN_ROUNDS),
+                new Kind(REPORT, List.of("done", "unchanged"), false, setup,
+                        (job, state, prompt) -> job.report(state), (state, limits) -> CodingGraph.afterReport(state)),
+                new Kind(EXPLAIN, List.of("done"), true, setup,
+                        CodingGraph::explain, (state, limits) -> "done"),
+                new Kind(ANSWER, List.of(), false, setup,
+                        (job, state, prompt) -> job.answer(state), (state, limits) -> {
+                    throw new IllegalStateException("an answer node has no outcome"); // terminal: never asked
                 }));
         Map<String, NodeKind> byName = new LinkedHashMap<>();
         kinds.forEach(kind -> byName.put(kind.name(), kind));
@@ -189,6 +220,7 @@ public final class CodingKinds {
         private final Step step;
         private final Router router;
         private final Set<String> limitNames = new LinkedHashSet<>();
+        private final Set<String> writes = new LinkedHashSet<>();
 
         Kind(String name, List<String> outcomes, boolean prompted, CodingGraph.Setup setup, Step step, Router router) {
             this.name = name;
@@ -197,6 +229,12 @@ public final class CodingKinds {
             this.setup = setup;
             this.step = step;
             this.router = router;
+        }
+
+        /** Declares the skill variables this kind's step writes (most coding kinds keep their data in the job's own state keys). */
+        Kind withWrites(String... names) {
+            writes.addAll(List.of(names));
+            return this;
         }
 
         /** Declares the skill limits this kind's step or router reads ({@link #limitNames}). */
@@ -237,10 +275,10 @@ public final class CodingKinds {
             return errors;
         }
 
-        /** The job keeps its data in the coding state keys, not in the skill's variables. */
+        /** The job keeps its data in the coding state keys, not in the skill's variables (except what {@link #withWrites} declares). */
         @Override
         public Set<String> writes(NodeSpec node) {
-            return Set.of();
+            return Set.copyOf(writes);
         }
 
         /** The prompt is sent as it is, not rendered as a template. */

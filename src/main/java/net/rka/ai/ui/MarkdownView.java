@@ -391,6 +391,11 @@ final class MarkdownView {
         return box;
     }
 
+    /** A table cell with at most this many characters is never wrapped. */
+    private static final int SHORT_CELL_CHARS = 28;
+    /** The narrowest a long cell is made, in pixels. */
+    private static final double LONG_CELL_MIN_WIDTH = 150;
+
     /** A table as a GridPane of labels, header row first. */
     private static Region table(org.commonmark.node.Node table) {
         GridPane grid = new GridPane();
@@ -403,8 +408,12 @@ final class MarkdownView {
                 int column = 0;
                 for (org.commonmark.node.Node cell = tr.getFirstChild(); cell != null; cell = cell.getNext()) {
                     boolean header = cell instanceof TableCell tc && tc.isHeader();
-                    Label label = new Label(plainText(cell));
+                    String text = plainText(cell);
+                    Label label = new Label(text);
                     label.setWrapText(true);
+                    // A wrapping label may shrink to a single letter when the table is wider than its bubble (a short column then reads
+                    // one letter per line): a short cell keeps its natural width, a long one wraps but not narrower than a few words
+                    label.setMinWidth(text.length() <= SHORT_CELL_CHARS ? Region.USE_PREF_SIZE : LONG_CELL_MIN_WIDTH);
                     label.getStyleClass().addAll(header ? "md-th" : "md-td", row % 2 == 0 ? "md-row-even" : "md-row-odd");
                     label.setMaxWidth(Double.MAX_VALUE);
                     label.setMaxHeight(Double.MAX_VALUE);

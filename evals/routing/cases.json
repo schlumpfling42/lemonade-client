@@ -1,0 +1,137 @@
+[
+  { "id": "status-where-are-we", "source": "real, 2026-11-12: answered by a 26-minute coding job",
+    "history": [],
+    "message": "I want to render mermaid diagrams in the response view, where are we with that?", "expect": "agent" },
+
+  { "id": "example-show-here", "source": "real, 2026-11-12: became a coding job that tried to run node (answer text is an approximation)",
+    "history": [
+      { "role": "user", "text": "I want to render mermaid diagrams in the response view, where are we with that?" },
+      { "role": "assistant", "text": "Mermaid rendering is wired in MarkdownView.codeBlock: it calls MermaidRenderer and shows the result as an image. It has not been tried on a sample diagram. Want me to test it with a sample diagram?" } ],
+    "message": "create one and show it here", "expect": "agent" },
+
+  { "id": "delete-yes", "source": "real, 2026-11-12: a coding job that needed 14 round trips and could not delete the file (answer text is an approximation)",
+    "history": [
+      { "role": "user", "text": "where are we with the mermaid view?" },
+      { "role": "assistant", "text": "The renderer works, but a placeholder file src/main/resources/mermaid/mermaid.min.js is still in the tree. Want me to delete that mermaid.min.js stub so there's no ambiguity left in the tree?" } ],
+    "message": "yes", "expect": "agent" },
+
+  { "id": "replan-java-only", "source": "real, 2026-11-12: lost the context and read the wrong files for six minutes (answer text is an approximation)",
+    "history": [
+      { "role": "user", "text": "I want a plugin that can render diagrams, what diagramming tools are out there that can be integrated into JavaFX?" },
+      { "role": "assistant", "text": "Three families: 1. PlantUML (pure Java, SVG output). 2. Mermaid through a WebView, which needs node and HTML. 3. A small renderer of our own. Plan: add the PlantUML dependency and render fenced blocks as images in MarkdownView. Shall I go ahead?" } ],
+    "message": "sorry ... I disagree with the plan ... replan ... no node, no html ... render a graphic and display it in javafx", "expect": "job" },
+
+  { "id": "remove-all-mermaid", "source": "real, 2026-11-12",
+    "history": [
+      { "role": "user", "text": "I want to render mermaid diagrams in the response view, where are we with that?" },
+      { "role": "assistant", "text": "Mermaid rendering is wired in MarkdownView.codeBlock through MermaidRenderer and MermaidPlugin. It is not tried yet." } ],
+    "message": "remove all the mermaid rendering code", "expect": "job" },
+
+  { "id": "option-a", "source": "real, 2026-11-12 (answer text is an approximation)",
+    "history": [
+      { "role": "user", "text": "how should we render diagrams?" },
+      { "role": "assistant", "text": "Option A: draw them with Java2D into an image and show it in an ImageView. Option B: embed mermaid.js in a WebView. I would choose A: no node, no HTML." } ],
+    "message": "OPtion A", "expect": "job" },
+
+  { "id": "yes-create-plan", "source": "real, 2026-11-12 (answer text is an approximation)",
+    "history": [
+      { "role": "user", "text": "what tools can render software diagrams in JavaFX?" },
+      { "role": "assistant", "text": "I recommend drawing the diagram with Java2D into an image and showing it in an ImageView: a small renderer class, a call in the code block of the markdown view, and a test with a sample flowchart. Shall I make a plan?" } ],
+    "message": "yes, create a plan", "expect": "job" },
+
+  { "id": "do-all-of-that", "source": "real, 2026-11-12 (answer text is an approximation)",
+    "history": [
+      { "role": "user", "text": "plan the diagram plugin" },
+      { "role": "assistant", "text": "Plan: 1. create DiagramModel and DiagramLayout in ui.diagram. 2. create DiagramView, a pane that draws nodes and edges. 3. open it from the skill review dialog. 4. add a test." } ],
+    "message": "do all of that", "expect": "job" },
+
+  { "id": "plan-that", "source": "real, 2026-11-12: the job got the first request of the conversation instead of the recommendation (answer text is an approximation)",
+    "history": [
+      { "role": "user", "text": "add a menu button to the conversation rows, like the folder rows have" },
+      { "role": "assistant", "text": "Done: the menu button is in the conversation rows." },
+      { "role": "user", "text": "how should we show mermaid diagrams?" },
+      { "role": "assistant", "text": "I recommend drawing the diagram with Java2D into an image and showing it in an ImageView: no node, no HTML, no WebView. Steps: a small renderer class, a call in the markdown view, a test." } ],
+    "message": "plan that", "expect": "job" },
+
+  { "id": "implement-it", "source": "pattern of the README",
+    "history": [
+      { "role": "user", "text": "what is the cleanest way to stop a running turn?" },
+      { "role": "assistant", "text": "Make Stop cancel the graph and the model request, and let no node start after it. That needs a flag in the live channel that every node checks, and an interrupt of the running node threads." } ],
+    "message": "implement it", "expect": "job" },
+
+  { "id": "fix-it-after-failure", "source": "real, 2026-11-12 (answer text is an approximation)",
+    "history": [
+      { "role": "user", "text": "create a mermaid plugin that reads mermaid and creates an svg, only java" },
+      { "role": "assistant", "text": "The job stopped: the build failed with two errors in MarkdownView.java. All changes were taken back." } ],
+    "message": "fix it", "expect": "job" },
+
+  { "id": "add-subtract", "source": "evaluation case add-method",
+    "history": [],
+    "message": "Add a method subtract(int a, int b) to the Calc class. It returns a minus b.", "expect": "job_plan" },
+
+  { "id": "fix-wrong-result", "source": "evaluation case unrelated-broken-file",
+    "history": [],
+    "message": "In the app folder, Calc.add gives the wrong result: 2 + 3 prints 6. Find out why and fix it.", "expect": "job_free" },
+
+  { "id": "create-plugin-java", "source": "real, 2026-11-10",
+    "history": [],
+    "message": "create a mermaid plugin that reads mermaid and creates an svg, only java", "expect": "job" },
+
+  { "id": "stop-button", "source": "invented for the check: a change that hooks into existing code",
+    "history": [],
+    "message": "Add a stop button to the chat window that cancels the running turn.", "expect": "job" },
+
+  { "id": "rename-everywhere", "source": "invented for the check: a change across classes",
+    "history": [],
+    "message": "Rename the method add to sum in Calc and in every file that calls it.", "expect": "job" },
+
+  { "id": "change-timeout", "source": "invented for the check: a small, named change",
+    "history": [],
+    "message": "Change the default model timeout from 15 to 30 minutes.", "expect": "job" },
+
+  { "id": "explain-add", "source": "evaluation case question",
+    "history": [],
+    "message": "What does the add method in Calc do?", "expect": "agent" },
+
+  { "id": "show-code", "source": "invented for the check",
+    "history": [],
+    "message": "show me the code of MarkdownView.codeBlock", "expect": "agent" },
+
+  { "id": "explain-triage", "source": "invented for the check",
+    "history": [],
+    "message": "explain how the triage works", "expect": "agent" },
+
+  { "id": "list-files", "source": "invented for the check: file handling",
+    "history": [],
+    "message": "list all the files in the project", "expect": "agent" },
+
+  { "id": "delete-folder", "source": "invented for the check: file handling, said by the user to be no coding job",
+    "history": [],
+    "message": "delete the folder build/tmp", "expect": "agent" },
+
+  { "id": "hello", "source": "invented for the check",
+    "history": [],
+    "message": "hello", "expect": "agent" },
+
+  { "id": "thanks", "source": "invented for the check",
+    "history": [
+      { "role": "user", "text": "where are we with the mermaid view?" },
+      { "role": "assistant", "text": "The renderer is wired and builds. It is not tried on a sample diagram yet." } ],
+    "message": "thanks, that helps", "expect": "agent" },
+
+  { "id": "why-node", "source": "real, 2026-11-12 (answer text is an approximation)",
+    "history": [
+      { "role": "user", "text": "create one and show it here" },
+      { "role": "assistant", "text": "The job proposed to run a node command to render the diagram; you denied it." } ],
+    "message": "why is this running node? I said java only", "expect": "agent" },
+
+  { "id": "question-after-job", "source": "invented for the check",
+    "history": [
+      { "role": "user", "text": "Add a method subtract(int a, int b) to the Calc class. It returns a minus b." },
+      { "role": "assistant", "text": "Done: every change is made and the build passes. Calc.subtract(int,int) is added next to add." } ],
+    "message": "did you change Main too?", "expect": "agent" },
+
+  { "id": "analyze-slow-plan", "source": "the user's rule: analyzing code is a coding job (label to be confirmed)",
+    "history": [],
+    "message": "analyze why the plan step of the coding job is so slow", "expect": "job" }
+]

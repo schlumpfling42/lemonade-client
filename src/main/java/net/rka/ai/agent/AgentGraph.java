@@ -11,6 +11,7 @@ import net.rka.ai.graph.annotations.Edge;
 import net.rka.ai.graph.annotations.Graph;
 import net.rka.ai.graph.annotations.Node;
 import net.rka.ai.graph.annotations.NodeWrapper;
+import net.rka.ai.graph.annotations.Offers;
 import net.rka.ai.graph.annotations.Route;
 import net.rka.ai.graph.annotations.Router;
 import net.rka.ai.graph.annotations.Subgraph;
@@ -36,9 +37,12 @@ import net.rka.ai.tools.FactBook;
 import net.rka.ai.tools.ToolRegistry;
 import net.rka.ai.tools.TrustedCommands;
 import net.rka.ai.tools.WorkFolder;
+import net.rka.ai.tracing.AgentLog;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.stream.Collectors;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -46,17 +50,21 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
-import java.util.TreeSet;
 
 /**
  * A ReAct-style agent with approval and trusted-command steps for risky tools
  * (diagram: docs/agent-graph.md):
  *
- *   START -> memory -> agent                                   (memory: summarize old messages if needed)
+ *   START -> memory -> analyze -> agent                        (memory: summarize old messages if needed;
+ *                                                               analyze: the model returns the goal and what happens next:
+ *                                                               an edge (agent or a job), a tool call, or a question for the user)
+ *            analyze --(question)--> ⏸ ask -> analyze           (the answer joins the conversation; at most 2 questions a turn)
+ *            tools | trusted | approval --(the analysis asked for the tool)--> analyze   (at most 4 tool calls a turn)
  *            agent --(safe tool calls)-----> tools ----> agent
  *                  --(only trusted risky)--> trusted --> agent   (subgraph: verify -> execute)
  *                  --(needs approval)------> approval -> agent   (subgraph: review -> execute)
- *                  --(startCodingJob)------> skill-coding -> agent  (the built-in skill coding, see below)
+ *                  --(startCodingJob)------> skill-coding -> agent  (the built-in skill coding, see below; a job that succeeded has answered the user itself, so agent makes no call and the turn ends;
+ *                                                                   also when the reply edits existing code by hand)
  *                  --(buildSkill)----------> skillBuilder -> agent  (subgraph, see below)
  *                  --(skill_&lt;name&gt; call)--> skill-&lt;name&gt; -> agent  (one subgraph per loaded skill file)
  *                  --(no tool calls)-------> END                 (also after 12 tool rounds in a turn)
@@ -68,9 +76,13 @@ import java.util.TreeSet;
  *   skill-&lt;name&gt; (subgraph, see {@link SkillGraphBuilder}): start -> the file's nodes -> finish
  *          + toolStep, ⏸ toolApproval (guarded tool calls), ⏸ before each askUser node, stopped
  *
- *   skill-coding (coding.json, steps in {@link CodingGraph}): start -> environment -> investigate (&lt;-&gt; investigateTools) -> plan
- *          -> review -> ⏸ planApproval -> implement (&lt;-&gt; implementTools) -> verify -> designReview -> report
- *          (planApproval --(revise)--> plan, implementTools --(revise)--> plan; every router's "stopped" -> report)
+ *   skill-coding (coding.json, steps in {@link CodingGraph}; the model never calls a tool in it): start -> environment
+ *          -> pickFiles -> gather -> plan (&lt;-&gt; read more code) -> ⏸ planApproval -> setup -> edit (per file)
+ *          -> verify (&lt;-&gt; fix) -> report -> (no code changed: explain) -> answer
+ *          (planApproval --(revise)--> revise --(change)--> plan, revise --(question)--> planApproval;
+ *          fix --(revise)--> planApproval; every router's "stopped" -> report;
+ *          pickFiles --(study)--> study (read-only model, research notes) -> gather;
+ *          open-ended work: pickFiles --(free)--> work (a model with tools) -> check (the build) -> [repair -> recheck] -> workDone, no plan)
  *
  *   The nodes of a skill are inlined as "skill-&lt;name&gt;-&lt;id&gt;" and the routes "skill-&lt;name&gt;" are added by the
  *   {@link Subgraphs @Subgraphs} method {@link #skills()}; the whole diagram with the node table is in docs/agent-graph.md.
@@ -112,10 +124,8 @@ import java.util.TreeSet;
  */
 @Graph(name = "agent", state = AgentGraph.State.class, serializer = Graph.Serializer.LANGCHAIN4J)
 @Edge(from = Graph.START, to = "memory")
-@Edge(from = "memory", to = "agent")
-@Edge(from = "tools", to = "agent")
-@Edge(from = "trusted", to = "agent")
-@Edge(from = "approval", to = "agent")
+@Edge(from = "memory", to = "analyze")
+@Edge(from = "ask", to = "analyze")
 @Edge(from = AgentGraph.SKILL_BUILDER, to = "agent")
 public class AgentGraph {
 
@@ -129,6 +139,12 @@ public class AgentGraph {
      * subgraph is a pause before its first node, "approval-review".
      */
     static final String APPROVAL_PAUSE = APPROVAL + "-" + ApprovalGraph.REVIEW;
+    /** The node the graph pauses before to ask the user the analysis' question ({@link #ask}). */
+    static final String ASK_PAUSE = "ask";
+    /** The most questions the analysis may ask the user in one turn. */
+    static final int MAX_ASKS = 2;
+    /** The most tool calls the analysis may make in one turn. */
+    static final int MAX_ANALYSIS_TOOLS = 4;
     /**
      * Every skill runs as the node "skill-&lt;name&gt;" ({@link #skills()}); its nodes are inlined as
      * "skill-&lt;name&gt;-&lt;node id&gt;", e.g. the pause "skill-release-notes-toolApproval".
@@ -183,6 +199,8 @@ public class AgentGraph {
         static final String SUMMARY_COVERED = "summaryCovered";
         /** The conversation's long-term facts, one "id&lt;TAB&gt;text" per line; replaced by the tool nodes. */
         static final String FACTS = "facts";
+        /** The files the tools touched and the version the conversation has seen of each ({@link Knowledge}): "path TAB version" per line. */
+        static final String KNOWLEDGE = "knowledge";
 
         // Coding job keys, used only by the coding kinds' nodes (CodingGraph, the skill "coding"). Values are Strings and
         // Integers (the plan as JSON), so the LangChain4j serializer checkpoints them without help.
@@ -193,53 +211,88 @@ public class AgentGraph {
         static final String CODING_CALL_ID = "codingCallId";
         /** The environment summary (OS, shell, tool versions) for the job's prompts. */
         static final String CODING_ENVIRONMENT = "codingEnvironment";
-        /** The coding jobs' own transcript (appender), kept out of the main {@link #MESSAGES}. */
-        static final String CODING_MESSAGES = "codingMessages";
-        /** Index into {@link #CODING_MESSAGES} where the current job begins (earlier jobs of the turn come before). */
-        static final String CODING_START = "codingStart";
-        /** What the investigation found (the model's summary text). */
-        static final String CODING_FINDINGS = "codingFindings";
-        /** The current plan as JSON ({@link CodingPlan#toJson()}). */
+        /** A folder with copies of the plan's files as they were when the build passed, kept while a design fix is tried; "" = none. */
+        static final String CODING_GOOD = "codingGood";
+        /** 1 when a design fix broke the build and was undone (the files are as they were before it). */
+        static final String CODING_DESIGN_UNDONE = "codingDesignUndone";
+        /** How many plans the job made (a revision or a read round makes the next): what shows a resumed pause changed something. */
+        static final String CODING_PLAN_ROUNDS = "codingPlanRounds";
+        /** The files the model picked for the work, one relative path per line ("" = none: new files only). */
+        static final String CODING_PICKS = "codingPicks";
+        /** "free" when the model judged the work open-ended (found out as it goes: no plan, no approval of one), "study" when it needs the existing code understood first (research notes before the plan), "" = plan right away. */
+        /** The question the analysis asks the user, as JSON {"question", "options"}; "" when there is none. Set by analyze, cleared by ask. */
+        /** "1" while the analysis waits for the result of a tool call it asked for; the tool nodes then return to it, not to the agent. */
+        static final String ANALYZING = "analyzing";
+        /** How many tool calls the analysis made in this turn (at most {@code MAX_ANALYSIS_TOOLS}). */
+        static final String ANALYSIS_TOOLS = "analysisTools";
+        static final String ASK_QUESTION = "askQuestion";
+        /** The user's answer to the question, written by Agent while the graph is paused before ask. */
+        static final String ASK_ANSWER = "askAnswer";
+        /** How many questions the analysis asked in this turn (at most {@code MAX_ASKS}). */
+        static final String ASK_ROUNDS = "askRounds";
+        static final String CODING_APPROACH = "codingApproach";
+        /** How the analysis told the job to go: "plan", "study" or "free"; "" when it did not say (the job then decides itself). Not reset by the job. */
+        static final String CODING_ROUTE = "codingRoute";
+        /** The outlines of the picked files (section id, kind, lines), made by gather for the plan. */
+        static final String CODING_CODE = "codingCode";
+        /** Sections the plan asked to read, as text, collected over the read rounds. */
+        static final String CODING_READ = "codingRead";
+        /** How many times the plan asked to read more code. */
+        static final String CODING_READ_ROUNDS = "codingReadRounds";
+        /** 1 while the plan asked to read and waits to be asked again (the router sends it back), else 0. */
+        static final String CODING_READ_PENDING = "codingReadPending";
+        /** The current plan as JSON ({@link CodingPlan#toJson()}), valid and normalized; "" while the plan asks to read. */
         static final String CODING_PLAN = "codingPlan";
         /** The user's answer to the plan: approve / revise / deny ({@link CodingGraph#APPROVE} ...); written by Agent on resume. */
         static final String CODING_DECISION = "codingDecision";
         /** The user's comment with a "revise" decision. */
         static final String CODING_COMMENT = "codingComment";
+        /** What the revise step made of the comment: "question" or "change". */
+        static final String CODING_REVISE_KIND = "codingReviseKind";
+        /** The user's points about the plan, one per line, from the revise step: what the next plan must deal with. */
+        static final String CODING_POINTS = "codingPoints";
+        /** The answer to the user's question about the plan, shown with the plan when it is asked about again. */
+        static final String CODING_ANSWER = "codingAnswer";
         /** Why the graph sent the job back to planning (e.g. an unplanned tool call). */
         static final String CODING_REVISION_REASON = "codingRevisionReason";
-        /** How many plan steps are done (the index of the current step). */
-        static final String CODING_STEP = "codingStep";
-        /** Model turns used on the current step. */
-        static final String CODING_STEP_TURNS = "codingStepTurns";
+        /** The ledger of the approved plan's changes as JSON ({@code Ledger}): pending, applied or failed each. */
+        static final String CODING_LEDGER = "codingLedger";
+        /** What verify or the design review found to repair, as JSON: file, section and what is wrong, one per section. */
+        static final String CODING_FIXES = "codingFixes";
+        /** 1 once the plan's setup commands ran (a revised plan doesn't run them again). */
+        static final String CODING_SETUP_DONE = "codingSetupDone";
         /** Verify attempts used in this job. */
         static final String CODING_ATTEMPTS = "codingAttempts";
         /** The output of the last verify run. */
         static final String CODING_VERIFY_OUTPUT = "codingVerifyOutput";
         /** The job's final report. */
         static final String CODING_REPORT = "codingReport";
-        /** Plan parse errors since the last valid plan, one per line ("plan: ..." / "review: ..."). */
-        static final String CODING_PLAN_ERRORS = "codingPlanErrors";
+        /** How the job ended, from the report step: "success", "failed" (some change stays or the user denied) or "unchanged" (no code was changed). */
+        static final String CODING_OUTCOME = "codingOutcome";
+        /** What the explain step told the user about a job that changed no code, and what they can do about it. */
+        static final String CODING_EXPLANATION = "codingExplanation";
         /** The plan the user approved last (JSON); a later revision only replaces it once approved. */
         static final String CODING_APPROVED_PLAN = "codingApprovedPlan";
-        /**
-         * The plan items that ran successfully, one "&lt;step number&gt;&lt;TAB&gt;&lt;item&gt;" per line, the item
-         * as {@link CodingPlan#items} names it: what shows that a step was carried out, not just answered.
-         */
-        static final String CODING_DONE_ITEMS = "codingDoneItems";
-        /** 1-based numbers of steps the job moved past although none of their items ran, comma-separated. */
-        static final String CODING_SKIPPED_STEPS = "codingSkippedSteps";
-        /** 1 once the current step was answered without running any of its items and the model was reminded. */
-        static final String CODING_STEP_REMINDED = "codingStepReminded";
-        /** Why the job stopped early (model or tool error, step turn limit, no valid plan); "" while it runs. */
+        /** Why the job stopped early (model or tool error, no valid plan, a failed setup command); "" while it runs. */
         static final String CODING_STOP_REASON = "codingStopReason";
         /** The job's Markdown plan file (absolute path; "" when plans aren't written, e.g. in tests). */
         static final String CODING_PLAN_FILE = "codingPlanFile";
         /** The design review's latest findings as a Markdown list ("" = none, or not reviewed yet). */
         static final String CODING_DESIGN_ISSUES = "codingDesignIssues";
+        /** What the intent check said of the change once the build passed: "ok", "gap: ...", "ask: ...", "decided", "doubt: ..." or "" (not checked). */
+        static final String CODING_INTENT = "codingIntent";
         /** How many design reviews ran in this job (at most {@code CodingGraph.MAX_DESIGN_ROUNDS}). */
         static final String CODING_DESIGN_ROUNDS = "codingDesignRounds";
-        /** Verify attempts used before the last design review: attempts after its fix count from here (0 = none). */
-        static final String CODING_VERIFY_BASE = "codingVerifyBase";
+        /** Folder with copies of the files the approved plan may change, as they were before the job (for diffs); "" = none. */
+        static final String CODING_BASELINE = "codingBaseline";
+        /** The trusted folder's files with their line counts, made once at the start of a job and told to every phase. */
+        static final String CODING_PROJECT_MAP = "codingProjectMap";
+        /** How often the job went back to the user because a fix needs a file the plan doesn't change. */
+        static final String CODING_REVISIONS = "codingRevisions";
+        /** What the plan check said of the plan before the user sees it: "ok", "problems: ...", "ask: ..." or "" (not checked). */
+        static final String CODING_PLAN_CHECK = "codingPlanCheck";
+        /** How many plan checks ran since the user last answered (at most {@code CodingGraph.MAX_PLAN_CHECKS}). */
+        static final String CODING_PLAN_CHECKS = "codingPlanChecks";
 
         // Skill keys, used only by the skill subgraphs (net.rka.ai.agent.skills.SkillGraphBuilder). Like the
         // coding keys: Strings and Integers (variables as a JSON object string), reset by a skill's start node.
@@ -287,19 +340,17 @@ public class AgentGraph {
         static final String SKILL_COMMENT = "skillComment";
 
         /**
-         * Channels define how updates merge. MESSAGES, CODING_MESSAGES and SKILL_MESSAGES append; keys not listed
+         * Channels define how updates merge. MESSAGES and SKILL_MESSAGES append; keys not listed
          * here default to "last value wins". Strings are used for the folder and commands
          * (not Path / lists) because they serialize trivially when the state is checkpointed.
          * <p>
          * Both keep duplicates: LangGraph4j's plain appender drops a message equal to one already in
          * the list. A conversation repeats messages all the time (the same question asked again, "yes"
-         * twice), and a job can too (the reviewer returning the plan unchanged, the same goal in a second
-         * job). Dropping them would make the state shorter than the history {@link Agent} passed in,
-         * breaking the "everything after the input is new" split, and {@link #CODING_START} indexes.
+         * twice). Dropping them would make the state shorter than the history {@link Agent} passed in,
+         * breaking the "everything after the input is new" split.
          */
         public static final Map<String, Channel<?>> SCHEMA = Map.of(
                 MESSAGES, Channels.appenderWithDuplicate(ArrayList::new),
-                CODING_MESSAGES, Channels.appenderWithDuplicate(ArrayList::new),
                 SKILL_MESSAGES, Channels.appenderWithDuplicate(ArrayList::new));
 
         public State(Map<String, Object> init) {
@@ -313,6 +364,11 @@ public class AgentGraph {
         public ChatMessage lastMessage() {
             List<ChatMessage> messages = messages();
             return messages.get(messages.size() - 1);
+        }
+
+        /** The ledger of the files the conversation has been shown, see {@link Knowledge}. */
+        String knowledge() {
+            return this.<String>value(KNOWLEDGE).orElse("");
         }
 
         public Map<String, Boolean> approvals() {
@@ -366,23 +422,72 @@ public class AgentGraph {
             return text(CODING_ENVIRONMENT);
         }
 
-        /** The current job's transcript: the part of {@link #CODING_MESSAGES} from {@link #codingStart()} on. */
-        public List<ChatMessage> codingMessages() {
-            List<ChatMessage> all = allCodingMessages();
-            return all.subList(Math.min(codingStart(), all.size()), all.size());
+        public String codingGood() {
+            return text(CODING_GOOD);
         }
 
-        /** Every coding job's messages in this run; the next job starts at its size. */
-        List<ChatMessage> allCodingMessages() {
-            return this.<List<ChatMessage>>value(CODING_MESSAGES).orElseGet(List::of);
+        public boolean codingDesignUndone() {
+            return number(CODING_DESIGN_UNDONE) > 0;
         }
 
-        public int codingStart() {
-            return number(CODING_START);
+        public int codingPlanRounds() {
+            return number(CODING_PLAN_ROUNDS);
         }
 
-        public String codingFindings() {
-            return text(CODING_FINDINGS);
+        public boolean analyzing() {
+            return !text(ANALYZING).isBlank();
+        }
+
+        public int analysisTools() {
+            return number(ANALYSIS_TOOLS);
+        }
+
+        public String askQuestion() {
+            return text(ASK_QUESTION);
+        }
+
+        public String askAnswer() {
+            return text(ASK_ANSWER);
+        }
+
+        public int askRounds() {
+            return number(ASK_ROUNDS);
+        }
+
+        /** How the analysis told the job to go ("plan", "study", "free"), or "". */
+        public String codingRoute() {
+            return text(CODING_ROUTE);
+        }
+
+        /** Whether the work is open-ended: the job lets the model work with the tools instead of planning changes first. */
+        public boolean codingFree() {
+            return "free".equals(text(CODING_APPROACH));
+        }
+
+        /** Whether the work needs the existing code understood first: a research step writes notes before the plan. */
+        public boolean codingStudy() {
+            return "study".equals(text(CODING_APPROACH));
+        }
+
+        /** The picked files, relative, in the order the model named them. */
+        public List<String> codingPicks() {
+            return text(CODING_PICKS).lines().filter(line -> !line.isBlank()).toList();
+        }
+
+        public String codingCode() {
+            return text(CODING_CODE);
+        }
+
+        public String codingRead() {
+            return text(CODING_READ);
+        }
+
+        public int codingReadRounds() {
+            return number(CODING_READ_ROUNDS);
+        }
+
+        public int codingReadPending() {
+            return number(CODING_READ_PENDING);
         }
 
         /** The current plan, or empty before the first valid one. */
@@ -399,16 +504,33 @@ public class AgentGraph {
             return text(CODING_COMMENT);
         }
 
+        public String codingReviseKind() {
+            return text(CODING_REVISE_KIND);
+        }
+
+        public String codingPoints() {
+            return text(CODING_POINTS);
+        }
+
+        public String codingAnswer() {
+            return text(CODING_ANSWER);
+        }
+
         public String codingRevisionReason() {
             return text(CODING_REVISION_REASON);
         }
 
-        public int codingStep() {
-            return number(CODING_STEP);
+        /** The record of the approved plan's changes; empty before the approval. */
+        Ledger codingLedger() {
+            return Ledger.parse(text(CODING_LEDGER));
         }
 
-        public int codingStepTurns() {
-            return number(CODING_STEP_TURNS);
+        public String codingFixes() {
+            return text(CODING_FIXES);
+        }
+
+        public int codingSetupDone() {
+            return number(CODING_SETUP_DONE);
         }
 
         public int codingAttempts() {
@@ -423,41 +545,22 @@ public class AgentGraph {
             return text(CODING_REPORT);
         }
 
-        /** Plan parse errors since the last valid plan, oldest first. */
-        public List<String> codingPlanErrors() {
-            return text(CODING_PLAN_ERRORS).lines().filter(line -> !line.isBlank()).toList();
+        public String codingIntent() {
+            return text(CODING_INTENT);
+        }
+
+        public String codingOutcome() {
+            return text(CODING_OUTCOME);
+        }
+
+        public String codingExplanation() {
+            return text(CODING_EXPLANATION);
         }
 
         /** The plan the user approved last, or empty before the first approval. */
         public Optional<CodingPlan> codingApprovedPlan() {
             String json = text(CODING_APPROVED_PLAN);
             return json.isBlank() ? Optional.empty() : Optional.of(CodingPlan.parse(json));
-        }
-
-        /** The record of plan items that ran, as stored: one "step&lt;TAB&gt;item" line each. */
-        public String codingDoneItems() {
-            return text(CODING_DONE_ITEMS);
-        }
-
-        /** The items of the given step (1-based) that ran successfully in this job. */
-        public Set<String> codingItemsDone(int stepNumber) {
-            String prefix = stepNumber + "\t";
-            Set<String> items = new HashSet<>();
-            codingDoneItems().lines().filter(l -> l.startsWith(prefix)).forEach(l -> items.add(l.substring(prefix.length())));
-            return items;
-        }
-
-        /** 1-based numbers of the skipped steps, in order. */
-        public Set<Integer> codingSkippedSteps() {
-            Set<Integer> steps = new TreeSet<>();
-            for (String part : text(CODING_SKIPPED_STEPS).split(",")) {
-                if (!part.isBlank()) steps.add(Integer.parseInt(part.strip())); // written by CodingGraph only
-            }
-            return steps;
-        }
-
-        public boolean codingStepReminded() {
-            return number(CODING_STEP_REMINDED) > 0;
         }
 
         public String codingStopReason() {
@@ -476,8 +579,24 @@ public class AgentGraph {
             return number(CODING_DESIGN_ROUNDS);
         }
 
-        public int codingVerifyBase() {
-            return number(CODING_VERIFY_BASE);
+        public String codingBaseline() {
+            return text(CODING_BASELINE);
+        }
+
+        public String codingProjectMap() {
+            return text(CODING_PROJECT_MAP);
+        }
+
+        public int codingRevisions() {
+            return number(CODING_REVISIONS);
+        }
+
+        public String codingPlanCheck() {
+            return text(CODING_PLAN_CHECK);
+        }
+
+        public int codingPlanChecks() {
+            return number(CODING_PLAN_CHECKS);
         }
 
         // --- Skills (see net.rka.ai.agent.skills.SkillGraphBuilder); missing keys read as "" / 0 ---
@@ -555,8 +674,7 @@ public class AgentGraph {
 
         /**
          * Rounds of tool calls the model made in this turn: AI messages with tool calls since the user's
-         * last message. A coding job's own rounds are in {@link #CODING_MESSAGES}, so they don't count;
-         * its {@code startCodingJob} call is one round.
+         * last message. A coding job makes no tool calls of the model's; its {@code startCodingJob} call is one round.
          */
         int agentToolRounds() {
             List<ChatMessage> messages = messages();
@@ -577,14 +695,13 @@ public class AgentGraph {
 
         /**
          * Whether a result from a {@link net.rka.ai.tools.WebContent} tool (web search, fetched page)
-         * came in since the user's last message: in the conversation, or in any coding job or skill of
-         * this turn (their transcripts are in {@link #CODING_MESSAGES} and {@link #SKILL_MESSAGES}, which
-         * a run starts empty, so all of it belongs to this turn). Until the next message, file changes
+         * came in since the user's last message: in the conversation, or in any skill of this turn (their
+         * transcript is {@link #SKILL_MESSAGES}, which a run starts empty, so all of it belongs to this turn). A coding
+         * job reads no web: its model has no tools. Until the next message, file changes
          * need approval and trusted commands don't count as trusted, also after the job or skill that
          * read the page has ended.
          */
         boolean webContentInTurn(ToolRegistry tools) {
-            if (allCodingMessages().stream().anyMatch(m -> isWebResult(m, tools))) return true;
             if (allSkillMessages().stream().anyMatch(m -> isWebResult(m, tools))) return true;
             List<ChatMessage> messages = messages();
             // Walk backwards: the turn starts at the latest UserMessage
@@ -602,7 +719,7 @@ public class AgentGraph {
 
         /**
          * Whether the call needs the user's approval: trusted commands, and web content in this turn
-         * (the conversation's, coding jobs' and skills' transcripts). Skills' tool steps use it too.
+         * (the conversation's and the skills' transcripts). Skills' tool steps use it too.
          */
         public boolean needsApproval(ToolRegistry tools, ToolExecutionRequest call) {
             return tools.needsApproval(call, trustedCommands(), webContentInTurn(tools));
@@ -614,31 +731,11 @@ public class AgentGraph {
         }
 
         /**
-         * Web content for a coding job: a {@link net.rka.ai.tools.WebContent} result in this job's or an
-         * earlier job's transcript of the turn, in a skill run of the turn, or in the conversation's turn
-         * that started it (the same as {@link #webContentInTurn}). From then on the user's trusted commands no longer run unasked
-         * inside the job (only the fixed probes, and what an approved plan covers).
-         */
-        boolean codingWebContent(ToolRegistry tools) {
-            return webContentInTurn(tools);
-        }
-
-        /** Whether a coding job may run the call as one of the user's trusted commands: the same rule as {@link #isTrusted}, with the job's web content. */
-        boolean codingTrusted(ToolRegistry tools, ToolExecutionRequest call) {
-            return tools.isTrusted(call, trustedCommands(), codingWebContent(tools));
-        }
-
-        /**
          * Tool calls of the latest AI message that have no result message yet.
          * This is how every node knows "what is still to do": results are matched to calls by id.
          */
         public List<ToolExecutionRequest> unansweredToolCalls() {
             return unansweredIn(messages());
-        }
-
-        /** Like {@link #unansweredToolCalls()}, for the current coding job's transcript. */
-        public List<ToolExecutionRequest> codingUnansweredToolCalls() {
-            return unansweredIn(codingMessages());
         }
 
         /** Like {@link #unansweredToolCalls()}, for the current skill run's transcript. */
@@ -667,6 +764,9 @@ public class AgentGraph {
     private final ChatModel model;
     private final ToolCallRunner toolCalls;
     private final NodeTracing tracing;
+    private final CodingRedirect codingRedirect = new CodingRedirect();
+    // Decides at the start of a turn what happens with the message; null when the analysis is off (see Agent#triage)
+    private final Analyzer analyzer;
     // Summary memory budgets (estimated tokens): summarize when the unsummarized part exceeds
     // summaryTrigger, keeping about summaryRecent of the newest messages verbatim
     private final int summaryTrigger;
@@ -700,6 +800,13 @@ public class AgentGraph {
      */
     AgentGraph(ChatModel model, ToolCallRunner toolCalls, NodeTracing tracing, int summaryTrigger, int summaryRecent,
                SkillLoader.Loaded skills, SkillLoader loader) {
+        this(model, toolCalls, tracing, summaryTrigger, summaryRecent, skills, loader, false);
+    }
+
+    /** @param triage whether every turn starts by asking the model what to do with the message ({@link Analyzer}) */
+    AgentGraph(ChatModel model, ToolCallRunner toolCalls, NodeTracing tracing, int summaryTrigger, int summaryRecent,
+               SkillLoader.Loaded skills, SkillLoader loader, boolean triage) {
+        this.analyzer = triage ? new Analyzer(model) : null;
         this.skills = skills;
         this.skillLoader = loader;
         this.kinds = Map.copyOf(loader.validator().kinds());
@@ -719,7 +826,7 @@ public class AgentGraph {
      * ({@link #skillPauses}), a coding job's plan approval among them.
      */
     CompiledGraph<State> compile() throws GraphStateException {
-        List<String> interrupts = new ArrayList<>(List.of(APPROVAL, SKILL_REVIEW_PAUSE));
+        List<String> interrupts = new ArrayList<>(List.of(APPROVAL, SKILL_REVIEW_PAUSE, ASK_PAUSE));
         interrupts.addAll(skillPauses(skills, kinds));
         return AgentGraphDefinition.compile(this, CompileConfig.builder()
                 .checkpointSaver(new MemorySaver())  // keeps state between invoke() calls, in memory only
@@ -770,7 +877,10 @@ public class AgentGraph {
     Map<String, Object> summarize(State state) {
         ConversationSummary current = state.summary();
         List<ChatMessage> messages = state.messages();
-        int cutoff = SummaryMemory.cutoff(messages, current.covered(), summaryTrigger, summaryRecent);
+        // Measured on what is actually sent (earlier turns compacted, see SummaryMemory.compactEarlierTurns), so
+        // a turn that read big files doesn't push the conversation over the limit and force a new summary
+        // (which changes the start of every request and costs the model server its cache) on every turn
+        int cutoff = SummaryMemory.cutoff(SummaryMemory.compactEarlierTurns(messages), current.covered(), summaryTrigger, summaryRecent);
         if (cutoff <= current.covered()) return Map.of(); // small enough: keep the summary as it is
         // One extra model call: merge the old summary with the messages that drop out of view
         String text = SummaryMemory.summarize(model, current.text(), messages.subList(current.covered(), cutoff));
@@ -779,31 +889,289 @@ public class AgentGraph {
     }
 
     /**
+     * What the agent step sends as the conversation: the older messages replaced by the summary, if any, and
+     * the earlier turns compacted (old tool results and written file contents shortened), so the model server
+     * doesn't re-read them on every request; the current turn is sent in full. {@link #triage} asks its question
+     * with exactly these messages first, so the server's cache serves both.
+     */
+    private List<ChatMessage> agentMessages(State state) {
+        return new ArrayList<>(ContextGroom.apply(SummaryMemory.view(state.messages(), state.summary())));
+    }
+
+    /** What the analysis may name from its node: read from the {@link Offers} annotation of {@link #analyze}. */
+    private static final Offers OFFERS = offersOf("analyze");
+
+    /** The edges the analysis may name, with the job edges only when {@code jobs}. */
+    static List<Offers.Edge> offeredEdges(boolean jobs) {
+        return Arrays.stream(OFFERS.edges()).filter(e -> jobs || !e.name().startsWith("job_")).toList();
+    }
+
+    private static Offers offersOf(String method) {
+        for (java.lang.reflect.Method m : AgentGraph.class.getDeclaredMethods()) {
+            if (m.getName().equals(method) && m.isAnnotationPresent(Offers.class)) return m.getAnnotation(Offers.class);
+        }
+        throw new IllegalStateException("no @Offers on " + method);
+    }
+
+    /**
+     * Once per turn, before the agent: asks the model what to do with the user's latest message ({@link Analyzer}, {@link AnalyzeMessage}):
+     * it returns the goal, written so that it stands alone, and where to go next. The edges it may name are the ones of the annotation
+     * below (the job edges only when the coding skill is loaded). {@code agent}: nothing happens here and the agent takes the turn.
+     * {@code job_*}: the {@code startCodingJob} call is added with the goal, which {@link #route} sends to the coding skill, and the way the
+     * job goes (plan, study, free) is kept in the state for {@code pickFiles}. Nothing happens (no model call) with the analysis switched
+     * off or when the turn doesn't start with a user message; two unusable answers in a row leave the turn to the agent.
+     */
+    @Offers(tools = {"findParts", "searchFiles", "readSection", "outline"}, edges = {
+            @Offers.Edge(name = "agent", does = "one model call, all tools, answers in text",
+                    useWhen = "question, explanation, example, file handling (list, find, delete, move)"),
+            @Offers.Edge(name = "job_plan", does = "coding job: choose files, plan, approval, edit, build",
+                    useWhen = "the request names the class or method and what to change"),
+            @Offers.Edge(name = "job_study", does = "coding job: read code first, then plan, approval, edit, build",
+                    useWhen = "the change touches several places or hooks into existing code"),
+            @Offers.Edge(name = "job_free", does = "coding job without a plan, works with tools, then build",
+                    useWhen = "cause unknown, something fails, commands must be run")})
+    @Node("analyze")
+    Map<String, Object> analyze(State state) {
+        List<ChatMessage> all = state.messages();
+        // After a tool call of its own the last message is the result, not the user's message
+        if (analyzer == null || all.isEmpty() || !(all.getLast() instanceof UserMessage || state.analyzing())) return Map.of();
+        boolean jobs = skillsByTool.containsKey(CodingGraph.START_TOOL);
+        List<Offers.Edge> edges = offeredEdges(jobs);
+        boolean mayAsk = state.askRounds() < MAX_ASKS;
+        List<dev.langchain4j.agent.tool.ToolSpecification> tools = state.analysisTools() >= MAX_ANALYSIS_TOOLS ? List.of()
+                : toolCalls.tools().specifications(Set.of(OFFERS.tools())::contains);
+        Analysis.Offered offered = new Analysis.Offered(edges.stream().map(Offers.Edge::name).collect(Collectors.toSet()),
+                tools.stream().map(dev.langchain4j.agent.tool.ToolSpecification::name).collect(Collectors.toSet()), mayAsk);
+        Optional<Analysis> analysis = analyzer.analyze(AnalyzeMessage.compose(edges, tools, mayAsk, all), offered);
+        if (analysis.isEmpty()) {
+            AgentLog.current().line("⇢ analysis: no usable answer, the agent takes it");
+            return Map.of();
+        }
+        if (analysis.get().next() instanceof Analysis.Tool tool) {
+            AgentLog.current().line("⇢ analysis: calls " + tool.name() + " " + AgentLog.oneLine(tool.args().toString(), 200));
+            // The call keeps the id the model gave it, so its result answers it
+            ToolExecutionRequest call = ToolExecutionRequest.builder()
+                    .id(tool.id() == null || tool.id().isBlank() ? "call_" + java.util.UUID.randomUUID().toString().replace("-", "") : tool.id())
+                    .name(tool.name()).arguments(tool.args().toString()).build();
+            return Map.of(State.MESSAGES, AiMessage.from(List.of(call)), State.ANALYZING, "1", State.ANALYSIS_TOOLS, state.analysisTools() + 1);
+        }
+        if (analysis.get().next() instanceof Analysis.Ask ask) {
+            AgentLog.current().line("⇢ analysis: asks the user · " + AgentLog.oneLine(ask.question(), 300));
+            return Map.of(State.ASK_QUESTION, Analysis.questionJson(ask), State.ASK_ANSWER, "", State.ANALYZING, "");
+        }
+        String edge = ((Analysis.Edge) analysis.get().next()).name();
+        AgentLog.current().line("⇢ analysis: " + edge + " · goal: " + AgentLog.oneLine(analysis.get().goal(), 300));
+        if (!edge.startsWith("job_")) return Map.of(State.ASK_QUESTION, "", State.ANALYZING, "");
+        String goal = analysis.get().goal();
+        return Map.of(State.MESSAGES, AiMessage.from(List.of(codingRedirect.startCallForGoal(goal))),
+                State.FACTS, State.encodeFacts(Objective.with(state.facts(), goal)),
+                State.CODING_ROUTE, edge.substring("job_".length()), State.ASK_QUESTION, "", State.ANALYZING, "");
+    }
+
+    /** After the tools ran: back to the analysis when it asked for them, else to the agent. */
+    @Router(from = "tools", routes = {@Route(on = "analyze", to = "analyze"), @Route(on = "agent", to = "agent")})
+    String afterTools(State state) {
+        return state.analyzing() ? "analyze" : "agent";
+    }
+
+    @Router(from = "trusted", routes = {@Route(on = "analyze", to = "analyze"), @Route(on = "agent", to = "agent")})
+    String afterTrusted(State state) {
+        return state.analyzing() ? "analyze" : "agent";
+    }
+
+    @Router(from = "approval", routes = {@Route(on = "analyze", to = "analyze"), @Route(on = "agent", to = "agent")})
+    String afterApproval(State state) {
+        return state.analyzing() ? "analyze" : "agent";
+    }
+
+    /** After the analysis: a question for the user goes to the pause {@link #ask}, anything else to the agent. */
+    @Router(from = "analyze", routes = {
+            @Route(on = "ask", to = "ask"),
+            @Route(on = "agent", to = "agent")})
+    String afterAnalyze(State state) {
+        return state.askQuestion().isBlank() ? "agent" : "ask";
+    }
+
+    /**
+     * The graph pauses before this node; {@link Agent} shows the question of the analysis to the user and writes the answer into the
+     * state. Here the question and the answer become part of the conversation (an assistant message and a user message), so the analysis,
+     * which runs again after this node, reads them like any other turn of the conversation. A dismissed question is answered with
+     * "decide yourself".
+     */
+    @Node("ask")
+    Map<String, Object> ask(State state) {
+        String question = Analysis.questionOf(state.askQuestion());
+        String answer = state.askAnswer().isBlank() ? "(no answer: decide yourself)" : state.askAnswer();
+        return Map.of(State.MESSAGES, List.of(AiMessage.from(question), UserMessage.from(answer)),
+                State.ASK_QUESTION, "", State.ASK_ANSWER, "", State.ASK_ROUNDS, state.askRounds() + 1);
+    }
+    /** Everything the user wrote in the conversation: a name they used themselves is not an invention of the model. */
+    private static String userWords(List<ChatMessage> messages) {
+        StringBuilder words = new StringBuilder();
+        for (ChatMessage message : messages) {
+            if (message instanceof UserMessage user) words.append(user.hasSingleText() ? user.singleText() : String.valueOf(user.contents())).append('\n');
+        }
+        return words.toString();
+    }
+
+    private static String latestUserText(List<ChatMessage> messages) {
+        for (int i = messages.size() - 1; i >= 0; i--) {
+            if (messages.get(i) instanceof UserMessage user) return user.hasSingleText() ? user.singleText().strip() : String.valueOf(user.contents());
+        }
+        return "";
+    }
+
+    /**
      * Asks the model for the next step: an answer or tool calls. After {@link #MAX_AGENT_ROUNDS} rounds
      * of tool calls in this turn it is asked once more without tools, and any calls it makes anyway are
      * stripped, so {@link #route} sees a plain answer and ends the turn with nothing left open.
+     * A turn that {@link #triage} started as a coding job reaches here with the job's call open: there is
+     * nothing to ask then.
      */
     @Node("agent")
     Map<String, Object> callModel(State state) {
+        // A call that the analysis added (the job's start, or a tool it wants the result of) is open: nothing to ask, the router sends it on
+        if (!state.unansweredToolCalls().isEmpty()) return Map.of();
+        // A job that succeeded has told the user itself (its report is the answer, see CodingGraph.answer): no model call to word it again
+        if (state.messages().getLast() instanceof AiMessage last && !last.hasToolExecutionRequests() && jobStartedThisTurn(state.messages())) return Map.of();
         boolean lastRound = state.agentToolRounds() >= MAX_AGENT_ROUNDS;
-        // The conversation (older messages replaced by the summary, if any) + the tool list;
-        // the model decides whether to answer or call tools
-        List<ChatMessage> messages = new ArrayList<>(SummaryMemory.view(state.messages(), state.summary()));
-        ChatRequest.Builder request = ChatRequest.builder();
+        // The conversation + the tool list; the model decides whether to answer or call tools
+        List<ChatMessage> messages = agentMessages(state);
+        // Files that changed since the conversation saw them (in the editor, by a job): one note at the end, said once.
+        // Added at the end and not stored, so the start of the prompt stays as the model server has it cached.
+        List<String> changed = Knowledge.changes(state.knowledge(), state.workFolder());
+        List<String> notes = new ArrayList<>();
+        if (!changed.isEmpty()) {
+            notes.add("Files changed since you looked at them, so what you saw of them is out of date (read again only what you need):\n- "
+                    + String.join("\n- ", changed));
+        }
+        // The jobs of earlier turns; a job of this turn has just reported, and its report is the last message
+        String jobs = jobStartedThisTurn(state.messages()) ? "" : JobLedger.note(state.messages());
+        if (!jobs.isEmpty()) notes.add(jobs);
+        if (!notes.isEmpty()) messages.add(UserMessage.from("Notes from the program (not from the user):\n\n" + String.join("\n\n", notes)));
+        // The tool list is sent on the last round too, although no call will run: the chat template puts the
+        // tools at the very start of the prompt, and a request without them would make the model server
+        // re-read the whole conversation instead of reusing what it has cached (minutes on a long turn).
+        ChatRequest.Builder request = ChatRequest.builder().toolSpecifications(toolCalls.tools().specifications());
         if (lastRound) {
             // Only this request needs it, so it isn't stored in the state
             messages.add(UserMessage.from("You have used " + MAX_AGENT_ROUNDS + " rounds of tool calls in this turn."
                     + " Answer now without tool calls: say what is done and what is left."));
-        } else {
-            request.toolSpecifications(toolCalls.tools().specifications());
         }
         AiMessage reply = model.chat(request.messages(messages).build()).aiMessage(); // blocks until Lemonade answers
+        if (!lastRound && announcesWithoutActing(reply)) reply = afterAnnouncement(state, request, messages, reply);
         if (lastRound && reply.hasToolExecutionRequests()) {
             // Calls despite no tools offered: keep only the text, so no call stays open in the conversation
             String text = reply.text() == null || reply.text().isBlank() ? TOO_MANY_ROUNDS : reply.text();
             reply = AiMessage.from(text);
+        } else if (jobStartedThisTurn(state.messages()) && changesFiles(reply)) {
+            // A job ran in this turn: code changes go through jobs. The agent patching around a job that stopped (the log
+            // showed it) left files corrupted, so it tells the user instead
+            AgentLog.current().line("⛔ the reply changes files after a coding job: not allowed in this turn");
+            reply = AiMessage.from(noChangesAfterJob(state.messages()));
+        } else if (skillsByTool.containsKey(CodingGraph.START_TOOL) && !jobStartedThisTurn(state.messages())) {
+            // Changing existing code by hand is coding work: its calls become the start of a coding job, which
+            // route() sends to skill-coding, so the user never has to ask for a job (see CodingRedirect)
+            AiMessage original = reply;
+            Optional<ToolExecutionRequest> job = codingRedirect.startCall(state.messages(), original, state.workFolder());
+            if (job.isPresent()) {
+                AgentLog.current().line("↪ the reply changes existing code by hand: starting a coding job instead");
+                reply = AiMessage.builder().text(original.text()).toolExecutionRequests(List.of(job.get())).build();
+            }
+        }
+        if (!reply.hasToolExecutionRequests() && reply.text() != null && !lastRound) {
+            // A name in the answer that is nowhere in the project is said so under the answer, where the user and the model read it
+            String note = NameCheck.note(reply.text(), userWords(state.messages()), state.workFolder(), net.rka.ai.tools.code.java.JavaWorkspaces.shared());
+            if (!note.isEmpty()) reply = AiMessage.from(reply.text() + "\n\n" + note);
+        }
+        if (!changed.isEmpty()) {
+            return Map.of(State.MESSAGES, reply, State.KNOWLEDGE, Knowledge.refreshed(state.knowledge(), state.workFolder()));
         }
         return Map.of(State.MESSAGES, reply); // appended to the history by the MESSAGES channel
+    }
+
+    /**
+     * A reply that promised an action and stopped ("Let me make these changes to ChatWindow.java:"), a local
+     * model's habit that a conversation full of it makes worse. Where the text names a source file, the promised
+     * work is a coding job and starts as one, with no more tries on the model. Otherwise the model is asked once
+     * more (the request starts with the same messages, so the model server reuses its cache) and the nudge isn't
+     * stored: the announcement keeps its text and takes the calls the model now makes, or the model's new answer
+     * replaces it; an answer that still announces a change to a source file starts the job.
+     */
+    private AiMessage afterAnnouncement(State state, ChatRequest.Builder request, List<ChatMessage> messages, AiMessage reply) {
+        Optional<AiMessage> job = jobFor(state, reply);
+        if (job.isPresent()) return job.get();
+        AgentLog.current().line("↺ the reply announces an action without making the call: asking once more");
+        List<ChatMessage> again = new ArrayList<>(messages);
+        again.add(reply);
+        again.add(UserMessage.from(ANNOUNCED_NUDGE));
+        AiMessage next = model.chat(request.messages(again).build()).aiMessage();
+        if (next.hasToolExecutionRequests()) {
+            return AiMessage.builder().text(reply.text()).toolExecutionRequests(next.toolExecutionRequests()).build();
+        }
+        if (next.text() == null || next.text().isBlank()) return reply;
+        return announcesWithoutActing(next) ? jobFor(state, next).orElse(next) : next;
+    }
+
+    /**
+     * Whether a coding job already started in this turn (a {@code startCodingJob} call after the user's last
+     * message). The graph starts a job from the model's replies only once per turn: a job that ended without
+     * finishing says why in its report, and starting the same job again from the reply that follows would loop
+     * (each job ends the same way, then the model announces the same change again).
+     */
+    static boolean jobStartedThisTurn(List<ChatMessage> messages) {
+        for (int i = messages.size() - 1; i >= 0; i--) {
+            ChatMessage message = messages.get(i);
+            if (message instanceof UserMessage) return false;
+            if (message instanceof AiMessage ai && ai.toolExecutionRequests().stream()
+                    .anyMatch(c -> CodingGraph.START_TOOL.equals(c.name()))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** The reply with a {@code startCodingJob} call in place of its announcement, when it names a source file. */
+    private Optional<AiMessage> jobFor(State state, AiMessage announcement) {
+        if (!skillsByTool.containsKey(CodingGraph.START_TOOL) || jobStartedThisTurn(state.messages())) return Optional.empty();
+        return codingRedirect.startCallForAnnouncement(state.messages(), announcement).map(call -> {
+            AgentLog.current().line("↪ the reply announces a change to a source file: starting a coding job instead");
+            return AiMessage.builder().text(announcement.text()).toolExecutionRequests(List.of(call)).build();
+        });
+    }
+
+    /** What the agent says instead of changing files itself after a coding job (see {@link #changesFiles}). */
+    static final String NO_CHANGES_AFTER_JOB = "A coding job ran in this turn, so I'm not changing files myself.";
+
+    /** The program's reply with the job's outcome (the first line of its report), which the chat does not otherwise show. */
+    private static String noChangesAfterJob(List<ChatMessage> messages) {
+        String outcome = "";
+        for (ChatMessage message : messages) {
+            if (message instanceof dev.langchain4j.data.message.ToolExecutionResultMessage result && CodingGraph.START_TOOL.equals(result.toolName())) {
+                outcome = result.text().lines().filter(l -> !l.isBlank()).findFirst().orElse("").strip();
+            }
+        }
+        return NO_CHANGES_AFTER_JOB + (outcome.isEmpty() ? "" : " The job's outcome: " + outcome)
+                + " Tell me what you want next (a new request starts a new job).";
+    }
+
+    /** Whether the reply calls a tool that changes files (the memory tools only change the conversation's facts). */
+    private boolean changesFiles(AiMessage reply) {
+        return reply.toolExecutionRequests().stream().anyMatch(c -> toolCalls.tools().writesFiles(c.name())
+                && !Set.of("remember", "forget").contains(c.name()));
+    }
+
+    /** What the model is told when its reply promised an action and ended (see {@link #announcesWithoutActing}). */
+    static final String ANNOUNCED_NUDGE = "You said what you would do next but made no tool call. Make the call now."
+            + " If there is nothing left to do, answer again without ending on a colon.";
+
+    /**
+     * Whether the reply is a plain answer that ends on a colon ("Let me make these changes:"): a promise of
+     * what comes next, from a local model that stopped before it. A finished answer ends with its content,
+     * not with an introduction.
+     */
+    static boolean announcesWithoutActing(AiMessage reply) {
+        return !reply.hasToolExecutionRequests() && reply.text() != null && reply.text().stripTrailing().endsWith(":");
     }
 
     /** Runs tool calls that don't need approval. */
@@ -838,8 +1206,8 @@ public class AgentGraph {
      * The skills, one subgraph each, built from their files ({@link SkillGraphBuilder}). The generated
      * graph adds each as the node {@code skill-<name>} with an edge back to "agent", and the route
      * {@code skill-<name>} to {@link #route}; with no skills loaded the map is empty and the graph is the
-     * same as without skills. The coding job is the built-in skill {@code coding}: investigate, plan, the
-     * user's plan approval (the pause before {@link #PLAN_APPROVAL}), implement, verify, and the report
+     * same as without skills. The coding job is the built-in skill {@code coding}: pick files, plan, the
+     * user's plan approval (the pause before {@link #PLAN_APPROVAL}), the changes, verify, fix, and the report
      * that answers its {@code startCodingJob} call.
      */
     @Subgraphs(prefix = SKILLS_PREFIX, returnTo = "agent", router = "route")

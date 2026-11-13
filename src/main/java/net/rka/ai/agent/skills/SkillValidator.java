@@ -41,8 +41,8 @@ import java.util.regex.Pattern;
  *       outcomes, a terminal node can be reached (no path that can only loop forever).</li>
  *   <li>Data flow: every {@code {{var}}} a node uses is an input, a built-in ({@code goal},
  *       {@code folder}, {@code environment}) or set on <em>every</em> path from {@code start} to it.</li>
- *   <li>Coding kinds: {@code coding.implement}, {@code coding.implementTools} and {@code coding.verify}
- *       are reachable from {@code start} and from every {@code coding.plan} / {@code coding.review} node only
+ *   <li>Coding kinds: {@code coding.setup}, {@code coding.edit}, {@code coding.fix} and {@code coding.verify}
+ *       are reachable from {@code start} and from every {@code coding.plan} node only
  *       through a {@code coding.planApproval} node's {@code approve} outcome; every path to a coding node
  *       starts with {@code coding.environment}.</li>
  * </ol>
@@ -137,23 +137,23 @@ public final class SkillValidator {
     /**
      * The coding job's safety rules, for every skill that uses the coding kinds:
      * <ul>
-     *   <li>The steps that work under a plan ({@link CodingKinds#IMPLEMENT}, {@link CodingKinds#IMPLEMENT_TOOLS}
-     *       which runs the planned calls, {@link CodingKinds#VERIFY} which runs the verify commands) are
-     *       reached only through a {@link CodingKinds#PLAN_APPROVAL} node's {@code approve} outcome: from
-     *       {@code start}, and from every node that writes a plan ({@link CodingKinds#PLAN},
-     *       {@link CodingKinds#REVIEW}), so a new draft (a revision, even by a second plan node after the
+     *   <li>The steps that work under a plan ({@link CodingKinds#SETUP} which runs the setup commands,
+     *       {@link CodingKinds#EDIT} and {@link CodingKinds#FIX} which change files, {@link CodingKinds#VERIFY} which
+     *       runs the verify commands) are reached only through a {@link CodingKinds#PLAN_APPROVAL} node's
+     *       {@code approve} outcome: from {@code start}, and from every node that writes a plan
+     *       ({@link CodingKinds#PLAN}), so a new draft (a revision, even by a second plan node after the
      *       approval) is always approved before it is worked by. Checked by walking the wiring from those
      *       nodes without the {@code approve} edges (every other edge counts, {@code stopped} too).</li>
      *   <li>{@link CodingKinds#ENVIRONMENT} comes first: every path from {@code start} to another coding
      *       node passes through one, so the job's keys are fresh (goal, call, plan) for every run.</li>
      * </ul>
-     * The kinds enforce the approval at run time too (implementTools and verify only run by the
+     * The kinds enforce the approval at run time too (setup, edit, fix and verify only run by the
      * approved plan); this rule rejects files whose wiring would only ever stop there.
      */
     private void checkPlanApproval(SkillFile skill, Map<String, NodeSpec> nodes, List<String> errors) {
         if (nodes.values().stream().noneMatch(node -> CodingKinds.isCodingKind(node.kind()))) return;
         Set<String> sources = new LinkedHashSet<>(List.of(skill.start()));
-        nodes.values().stream().filter(node -> CodingKinds.PLAN.equals(node.kind()) || CodingKinds.REVIEW.equals(node.kind()))
+        nodes.values().stream().filter(node -> CodingKinds.PLAN.equals(node.kind()))
                 .forEach(node -> sources.add(node.id()));
         Set<String> reported = new HashSet<>();
         for (String source : sources) {
@@ -164,7 +164,7 @@ public final class SkillValidator {
                 if (isGuardedByPlanApproval(node) && reported.add(id)) {
                     errors.add("node `" + id + "`: a " + node.kind() + " node may only be reached through a "
                             + CodingKinds.PLAN_APPROVAL + " node's `" + CodingKinds.APPROVE + "` outcome, from `start` and"
-                            + " from every plan or review node, so nothing runs by a plan the user didn't approve;"
+                            + " from every plan node, so nothing runs by a plan the user didn't approve;"
                             + " this wiring has a path around it from `" + source + "`.");
                 }
             }
@@ -196,8 +196,8 @@ public final class SkillValidator {
     }
 
     private static boolean isGuardedByPlanApproval(NodeSpec node) {
-        return CodingKinds.IMPLEMENT.equals(node.kind()) || CodingKinds.IMPLEMENT_TOOLS.equals(node.kind())
-                || CodingKinds.VERIFY.equals(node.kind());
+        return CodingKinds.SETUP.equals(node.kind()) || CodingKinds.EDIT.equals(node.kind())
+                || CodingKinds.FIX.equals(node.kind()) || CodingKinds.VERIFY.equals(node.kind());
     }
 
     private void checkHeader(SkillFile skill, boolean builtIn, String pinnedTool, List<String> errors) {

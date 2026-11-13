@@ -32,6 +32,16 @@ import java.time.Duration;
  */
 public class TerminalTools {
 
+    private final net.rka.ai.tools.code.java.JavaWorkspaces workspaces;
+
+    public TerminalTools() {
+        this(net.rka.ai.tools.code.java.JavaWorkspaces.shared());
+    }
+
+    public TerminalTools(net.rka.ai.tools.code.java.JavaWorkspaces workspaces) {
+        this.workspaces = workspaces;
+    }
+
     /**
      * Invocation parameter (Integer seconds) that overrides the global command timeout for one run;
      * a coding job sets it so long builds and test runs aren't killed after the default minute.
@@ -62,6 +72,13 @@ public class TerminalTools {
             throw new IllegalArgumentException("Working directory does not exist: " + dir);
         }
         // Per-run timeout if the graph set one, else CommandRunner's global default
+        // A build or test reads the files: write the Java changes held in memory first
+        net.rka.ai.tools.code.java.JavaWorkspace.FlushResult flushed = workspaces.flush(folder);
+        if (!flushed.ok()) {
+            throw new IllegalStateException("Not run: these Java files changed on disk while they had changes in memory, so they were not"
+                    + " written: " + String.join(", ", flushed.conflicts()) + ". Call javaFlush with force true to write the changes in"
+                    + " memory over the files, or javaDiscard to take the files as they are.");
+        }
         Object seconds = parameters.asMap().get(TIMEOUT_PARAMETER);
         Duration timeout = seconds instanceof Integer s ? Duration.ofSeconds(s) : CommandRunner.defaultTimeout();
         return CommandRunner.run(CommandRunner.shell(command), dir, timeout, CommandRunner.output(parameters));

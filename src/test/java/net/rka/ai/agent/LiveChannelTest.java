@@ -33,18 +33,18 @@ class LiveChannelTest {
 
     @Test
     void thePlanStreamsAsProgressWithItsThinking() {
-        // As Agent sets it for the coding skill: the plan and review kinds' nodes, by tracing name
+        // As Agent sets it for the coding skill: the plan and edit kinds' nodes, by tracing name
         live.skillWork(Map.of("skill/coding/plan", LiveChannel.hiddenWorkOfKind(CodingKinds.PLAN),
-                "skill/coding/review", LiveChannel.hiddenWorkOfKind(CodingKinds.REVIEW)));
+                "skill/coding/edit", LiveChannel.hiddenWorkOfKind(CodingKinds.EDIT)));
         live.enter("skill/coding/plan");
         live.thinking("order the steps");
         live.text("{\"summary\":");
         live.text("\"x\"}");
         assertEquals(List.of("thinking:order the steps", "Writing the plan:11", "Writing the plan:15"), events);
 
-        live.enter("skill/coding/review"); // the count starts again for the next step
+        live.enter("skill/coding/edit"); // the count starts again for the next step
         live.text("{}");
-        assertEquals("Reviewing the plan:2", events.getLast());
+        assertEquals("Writing code:2", events.getLast());
     }
 
     @Test
@@ -53,5 +53,14 @@ class LiveChannelTest {
         live.thinking("what to keep");
         live.text("Summary: ...");
         assertEquals(List.of("Updating memory:12"), events);
+    }
+
+    @Test
+    void theAnalysisShowsOnlyProgressNotItsTextOrItsCall() {
+        live.enter("analyze");
+        live.text("thinking aloud");
+        live.toolCall(0, "route", "{\"goal\":\"g\",\"edge\":\"agent\"}");
+        assertEquals(List.of("Deciding how to handle this:" + "thinking aloud".length(),
+                "Deciding how to handle this:" + ("thinking aloud".length() + "{\"goal\":\"g\",\"edge\":\"agent\"}".length())), events);
     }
 }

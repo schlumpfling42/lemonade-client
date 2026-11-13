@@ -1,0 +1,12 @@
+{
+  "id": "add-parameter-callers",
+  "description": "Change a signature and update every caller in other files",
+  "fixture": "shop",
+  "prompt": "Change Order.add to take a second parameter, boolean gift (it is not used yet). Update every caller to pass false.",
+  "expectCodingJob": true,
+  "checks": [
+    { "type": "fileContains", "path": "src/shop/Order.java", "regex": "add\\s*\\(\\s*Item\\s+item\\s*,\\s*boolean\\s+gift\\s*\\)" },
+    { "type": "fileContains", "path": "src/shop/Main.java", "regex": "order\\.add\\(new Item\\(\"pen\", 150, 4\\),\\s*false\\)" },
+    { "type": "command", "command": "javac -d out src/shop/*.java && java -cp out shop.Main", "outputContains": "total 1620" }
+  ]
+}

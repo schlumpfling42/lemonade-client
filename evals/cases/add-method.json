@@ -1,0 +1,13 @@
+{
+  "id": "add-method",
+  "description": "Add one small method to an existing class",
+  "fixture": "calc",
+  "prompt": "Add a method subtract(int a, int b) to the Calc class. It returns a minus b.",
+  "expectCodingJob": true,
+  "checks": [
+    { "type": "fileContains", "path": "src/Calc.java", "regex": "int\\s+subtract\\s*\\(\\s*int\\s+a\\s*,\\s*int\\s+b\\s*\\)" },
+    { "type": "fileContains", "path": "src/Calc.java", "text": "public int add(int a, int b)" },
+    { "type": "command", "command": "javac -d out src/Calc.java src/Main.java" },
+    { "type": "fileUnchanged", "path": "src/Main.java" }
+  ]
+}

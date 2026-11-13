@@ -1,0 +1,12 @@
+{
+  "id": "show-example",
+  "description": "A request for an example written in the answer is answered by the plain agent, with a mermaid block: no coding job, no command, no file changed (it once became a coding job that tried to run node)",
+  "fixture": "plugins",
+  "prompt": "Create a small mermaid flowchart of a login flow and show it here.",
+  "expectCodingJob": false,
+  "checks": [
+    { "type": "answerContains", "text": "```mermaid" },
+    { "type": "fileUnchanged", "path": "Registry.java" },
+    { "type": "fileUnchanged", "path": "Main.java" }
+  ]
+}

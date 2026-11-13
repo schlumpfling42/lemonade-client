@@ -1,0 +1,13 @@
+{
+  "id": "rename-across-files",
+  "description": "Rename a method and its callers in other files",
+  "fixture": "shop",
+  "prompt": "Rename Order.count() to size() and update every caller.",
+  "expectCodingJob": true,
+  "checks": [
+    { "type": "fileContains", "path": "src/shop/Order.java", "regex": "int\\s+size\\s*\\(\\s*\\)" },
+    { "type": "fileNotContains", "path": "src/shop/Order.java", "regex": "int\\s+count\\s*\\(" },
+    { "type": "fileNotContains", "path": "src/shop/Main.java", "text": "order.count()" },
+    { "type": "command", "command": "javac -d out src/shop/*.java && java -cp out shop.Main", "outputContains": "count 2" }
+  ]
+}
