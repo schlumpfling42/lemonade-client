@@ -3,18 +3,6 @@
     "configurations": [
         {
             "type": "java",
-            "name": "ManualLauncher",
-            "request": "launch",
-            "mainClass": "net.rka.ai.ManualLauncher",
-            "preLaunchTask": "gradle classes",
-            "classPaths": [
-                "${workspaceFolder}/build/classes/java/main",
-                "${workspaceFolder}/build/resources/main",
-                "$Auto"
-            ]
-        },
-        {
-            "type": "java",
             "name": "Launcher",
             "request": "launch",
             "mainClass": "net.rka.ai.Launcher",

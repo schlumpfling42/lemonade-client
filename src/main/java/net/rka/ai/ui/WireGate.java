@@ -26,11 +26,11 @@ public final class WireGate implements ModelGate {
     private final ReentrantLock one = new ReentrantLock(true);
     private final AtomicInteger counter = new AtomicInteger();
     private final ThreadLocal<Integer> number = new ThreadLocal<>();
-    private volatile WireWindow window;
-    private volatile boolean holdRequests = true;
-    private volatile boolean holdResponses = true;
+    private volatile WireView window;
+    private volatile boolean holdRequests;
+    private volatile boolean holdResponses;
 
-    void attach(WireWindow window) {
+    void attach(WireView window) {
         this.window = window;
     }
 
@@ -42,9 +42,14 @@ public final class WireGate implements ModelGate {
         this.holdResponses = hold;
     }
 
+    /** Whether the answers wait for the person: what the model writes then shows in the traffic view only, and reaches the chat when it is let through. */
+    boolean holdsResponses() {
+        return holdResponses;
+    }
+
     @Override
     public ChatRequest beforeSend(ChatRequest request) {
-        WireWindow shown = window;
+        WireView shown = window;
         int n = counter.incrementAndGet();
         number.set(n);
         if (shown == null) return request;
@@ -66,7 +71,7 @@ public final class WireGate implements ModelGate {
 
     @Override
     public ChatResponse beforeUse(ChatRequest sent, ChatResponse response) {
-        WireWindow shown = window;
+        WireView shown = window;
         int n = number.get() == null ? 0 : number.get();
         number.remove();
         if (shown == null) return response;
@@ -84,14 +89,14 @@ public final class WireGate implements ModelGate {
     @Override
     public void failed(ChatRequest sent, RuntimeException error) {
         number.remove();
-        WireWindow shown = window;
+        WireView shown = window;
         if (shown != null) {
             release(shown);
             Platform.runLater(() -> shown.failed(String.valueOf(error.getMessage())));
         }
     }
 
-    private void release(WireWindow shown) {
+    private void release(WireView shown) {
         if (one.isHeldByCurrentThread()) one.unlock();
         Platform.runLater(shown::idle);
     }
@@ -115,7 +120,7 @@ public final class WireGate implements ModelGate {
 
     /** What the model writes while it writes: shown live in the window, not yet in the chat. */
     void live(String kind, String delta) {
-        WireWindow shown = window;
+        WireView shown = window;
         if (shown != null) Platform.runLater(() -> shown.live(kind, delta));
     }
 }

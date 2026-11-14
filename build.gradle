@@ -107,16 +107,6 @@ tasks.register('runCli', JavaExec) {
     standardInput = System.in // for approving terminal/SSH commands
 }
 
-// `./gradlew runManual` opens the chat with a second window that holds every call of the model: the request before it is sent, the answer before it is used
-tasks.register('runManual', JavaExec) {
-    group = 'application'
-    description = 'Runs the chat window with manual control of every request to and answer from the model.'
-    classpath = sourceSets.main.runtimeClasspath
-    mainClass = 'net.rka.ai.ManualLauncher'
-    javaLauncher = javaToolchains.launcherFor(java.toolchain)
-    jvmArgs '--enable-native-access=ALL-UNNAMED'
-}
-
 // `./gradlew runEval --args="--only add-method"` runs the evaluation cases in evals/cases against the real agent and model (see README)
 tasks.register('runEval', JavaExec) {
     group = 'verification'

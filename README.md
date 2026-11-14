@@ -499,28 +499,26 @@ changed while the plan waited. Any step of the graph that gives the same result 
 unchanged) stops the run with a message that says which step went round in circles (`LoopWatch`, kept in the graph state; the plain
 agent's tool loop ends by itself after twelve rounds and is not counted). The CLI doesn't save conversations.
 
-## Manual control of the model
+## The model's traffic
 
-```fish
-./gradlew runManual   # the chat window, plus a window with every call of the model held for you
-```
+The button **⇄ Model traffic** in the header opens a sidebar on the right of the chat (it adds its width to the window, and the window and the
+sidebar come back as they were after a restart). It lists every call to the model of the running app (the newest is selected while it happens) and shows the one
+you pick:
 
-Everything works as in the normal window (tools, approvals, coding jobs, memory), but no call to the model goes out or comes back without
-you. The second window, **Model traffic**, shows
+- **the request**: the whole thing the server receives (system message, every message, earlier tool calls and their results) as text with a
+  line `=== user ===` (or `system`, `assistant`, `tool calls`, `tool result id=… tool=…`) before each message. The line above names the
+  model, the numbers and the number of tools; **Tools…** lists them (they are sent as they are);
+- **the answer**: its thinking, its text and its tool calls (`=== thinking ===`, `=== text ===`, `=== tool calls ===` with a JSON list), as
+  the model wrote them. While the model writes, the text shows here as it arrives.
 
-- **the request before it is sent**: the whole thing the server will receive (system message, every message, earlier tool calls and their
-  results) as text with a line `=== user ===` (or `system`, `assistant`, `tool calls`, `tool result id=â€¦ tool=â€¦`) before each message. Change
-  anything, then **Send**; **Back to the original** undoes your changes; **Cancel the call** fails the call (the job or the turn that made it
-  stops with "cancelled by the user"). The line above the text names the model, the numbers and the number of tools; **Toolsâ€¦** lists them
-  (they are sent as they are);
-- **the answer before the application uses it**: its thinking, its text and its tool calls (`=== thinking ===`, `=== text ===`,
-  `=== tool calls ===` with a JSON list), as the model wrote them. While the model writes, the text appears here as it arrives, not in the chat.
-  Change it, then **Use this answer**: tool calls you add are run, text you change is what the graph and the chat get.
-
-The two boxes at the bottom switch holding off for requests or for answers (then that side passes at once, and is only shown). The gate sits
-directly in front of the model client, below the fitting of a request to the context window (`GatedChatModel`, `WireCodec`, `WireGate`,
-`WireWindow`), so what you see is what the server receives; the agent log and the traces record what was really sent. **Stop** in the chat
-cancels a held call. Start the main class `net.rka.ai.ManualLauncher` from an IDE if you do not use Gradle.
+By default nothing is held: the sidebar only shows what goes to the model and what comes back. Tick **hold every request** and each request
+waits in the sidebar until you press **Send** (the sidebar opens itself when a call is held): change anything first, **Back to the original**
+undoes your changes, **Cancel the call** fails the call (the job or the turn that made it stops with "cancelled by the user"). Tick **hold
+every answer** and each answer waits until you press **Use this answer**: tool calls you add are run, text you change is what the graph and
+the chat get; while answers are held, the text of the model reaches the chat only then. A held call must be dealt with before an older call
+can be looked at. The ticks are remembered. The gate sits directly in front of the model client, below the fitting of a request to the
+context window (`GatedChatModel`, `WireCodec`, `WireGate`, `WireView`), so what you see is what the server receives; the agent log and the
+traces record what was really sent. **Stop** in the chat cancels a held call.
 
 ## Attaching files
 

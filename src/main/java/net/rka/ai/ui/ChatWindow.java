@@ -140,8 +140,13 @@ public class ChatWindow extends Application {
         return t;
     });
 
-    // Manual mode (net.rka.ai.ManualLauncher sets chat.manual): every call to the model is held in the WireWindow for the person to read and change
-    private final WireGate wireGate = Boolean.getBoolean("chat.manual") ? new WireGate() : null;
+    // Every call to the model passes this gate; the traffic sidebar (WireView) shows the calls and, with its hold boxes ticked, keeps a call
+    // until the person has read and changed it
+    private final WireGate wireGate = new WireGate();
+    /** The sidebar on the right with the traffic of the model; its width is added to the window when it opens. */
+    private final VBox trafficPanel = new VBox();
+    private static final double TRAFFIC_WIDTH = 520;
+    private final javafx.scene.control.ToggleButton trafficToggle = new javafx.scene.control.ToggleButton("⇄ Model traffic");
 
     // Where the person was (open conversation, unsent text, window place), written as it changes so a restart does not lose it
     private final UiState ui = UiState.load(Settings.globalFile().resolveSibling("ui-state.json"));
@@ -252,7 +257,7 @@ public class ChatWindow extends Application {
         this.stage = stage;
 
         // --- Header: menu button, title and status line, settings button ---
-        Label title = new Label(wireGate == null ? "Lemonade Agent" : "Lemonade Agent Â· manual control");
+        Label title = new Label("Lemonade Agent");
         title.getStyleClass().add("title"); // style classes connect nodes to rules in chat.css
         status.setText(agent.modelName() + " @ " + agent.baseUrl()
                 + "   ·   Tracing: " + agent.tracingDescription());
@@ -271,10 +276,19 @@ public class ChatWindow extends Application {
         // An empty Region that grows pushes the settings button to the right edge
         Region headerSpacer = new Region();
         HBox.setHgrow(headerSpacer, Priority.ALWAYS);
-        HBox header = new HBox(12, toggleSidebar, new VBox(2, title, status), headerSpacer, globalSettingsButton);
+        trafficToggle.getStyleClass().add("header-button");
+        trafficToggle.setTooltip(new Tooltip("Open the sidebar with every message to and from the model: read it, and hold a call to change it"));
+        trafficToggle.setOnAction(e -> setTrafficVisible(trafficToggle.isSelected(), true));
+        HBox header = new HBox(12, toggleSidebar, new VBox(2, title, status), headerSpacer, trafficToggle, globalSettingsButton);
         header.setAlignment(Pos.CENTER_LEFT);
         header.getStyleClass().add("header");
         buildSidebar(); // fills the sidebar VBox and loads the saved conversations
+        WireView traffic = new WireView(wireGate, ui, this::revealTraffic, ui::save);
+        VBox.setVgrow(traffic, Priority.ALWAYS);
+        trafficPanel.getChildren().add(traffic);
+        trafficPanel.setPrefWidth(TRAFFIC_WIDTH);
+        trafficPanel.setMinWidth(360);
+        trafficPanel.setStyle("-fx-border-color: #d0d0d0; -fx-border-width: 0 0 0 1;");
 
         // --- Transcript ---
         messages.setPadding(new Insets(20, 24, 20, 24));
@@ -349,7 +363,7 @@ public class ChatWindow extends Application {
 
         // BorderPane(center, top, right, bottom, left): two nested ones give the layout drawn in the class doc
         BorderPane chat = new BorderPane(split, null, null, composer, null);
-        BorderPane root = new BorderPane(chat, header, null, null, sidebar);
+        BorderPane root = new BorderPane(chat, header, trafficPanel, null, sidebar);
         Scene scene = new Scene(root, ui.hasBounds() ? ui.width : 1040, ui.hasBounds() ? ui.height : 680);
         // The Material theme; loaded from the classpath (src/main/resources/chat.css)
         scene.getStylesheets().add(getClass().getResource("/chat.css").toExternalForm());
@@ -358,7 +372,6 @@ public class ChatWindow extends Application {
         stage.setScene(scene);
         restorePlace();
         stage.show();
-        if (wireGate != null) new WireWindow(wireGate, stage); // the window with every call of the model, held for the person
         restoreSession();
         watchPlace();
         input.requestFocus(); // ready to type
@@ -444,13 +457,14 @@ public class ChatWindow extends Application {
             }
 
             // Real-time pieces: gathered on this worker thread, drawn on the FX thread (see LiveReply)
-            // In manual mode what the model writes is shown in the WireWindow, and reaches the chat only when the person lets it through
-            @Override public void onPartialThinking(String delta) { if (wireGate != null) wireGate.live("thinking", delta); else streaming.thinking(delta); }
-            @Override public void onPartialText(String delta) { if (wireGate != null) wireGate.live("text", delta); else streaming.text(delta); }
+            // What the model writes is shown in the traffic sidebar as it comes; with the answers held it reaches the chat only when the person lets it through
+            @Override public void onPartialThinking(String delta) { wireGate.live("thinking", delta); if (!wireGate.holdsResponses()) streaming.thinking(delta); }
+            @Override public void onPartialText(String delta) { wireGate.live("text", delta); if (!wireGate.holdsResponses()) streaming.text(delta); }
             @Override public void onPartialToolCall(int index, String name, String delta) {
-                if (wireGate != null) wireGate.live("tool call " + name, delta); else streaming.toolCall(index, name, delta);
+                wireGate.live("tool call " + name, delta);
+                if (!wireGate.holdsResponses()) streaming.toolCall(index, name, delta);
             }
-            @Override public void onPartialWork(String label, int characters) { if (wireGate == null) streaming.work(label, characters); }
+            @Override public void onPartialWork(String label, int characters) { if (!wireGate.holdsResponses()) streaming.work(label, characters); }
             @Override public void onStepDone() { streaming.clear(); }
 
             @Override
@@ -1592,6 +1606,29 @@ public class ChatWindow extends Application {
         if (ui.maximized) stage.setMaximized(true);
         sidebar.setVisible(ui.sidebarVisible);
         sidebar.setManaged(ui.sidebarVisible);
+        setTrafficVisible(ui.trafficVisible, false); // the saved width already has its room
+    }
+
+    /**
+     * Opens or closes the sidebar with the traffic of the model. Opening gives the window the sidebar's width (closing takes it back) so
+     * the chat keeps its size, unless the window is maximized.
+     */
+    private void setTrafficVisible(boolean show, boolean resize) {
+        boolean was = trafficPanel.isVisible();
+        trafficPanel.setVisible(show);
+        trafficPanel.setManaged(show);
+        trafficToggle.setSelected(show);
+        ui.trafficVisible = show;
+        if (resize && show != was && stage != null && !stage.isMaximized() && !stage.isFullScreen()) {
+            stage.setWidth(Math.max(stage.getMinWidth(), stage.getWidth() + (show ? TRAFFIC_WIDTH : -TRAFFIC_WIDTH)));
+        }
+        ui.save();
+    }
+
+    /** A call is held and waits for the person: the sidebar opens itself and the window comes to the front. */
+    private void revealTraffic() {
+        if (!trafficPanel.isVisible()) setTrafficVisible(true, true);
+        if (stage != null) stage.toFront();
     }
 
     /** The text that was typed and not sent, and the conversation that was open. */

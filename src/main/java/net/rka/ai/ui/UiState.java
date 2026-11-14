@@ -30,6 +30,11 @@ final class UiState {
     public Double height;
     public boolean maximized;
     public boolean sidebarVisible = true;
+    /** Whether the sidebar with the traffic of the model is open. */
+    public boolean trafficVisible;
+    /** The two boxes of that sidebar: hold every request / every answer until the person lets it go. */
+    public boolean holdRequests;
+    public boolean holdResponses;
 
     @JsonIgnore
     private Path file;
