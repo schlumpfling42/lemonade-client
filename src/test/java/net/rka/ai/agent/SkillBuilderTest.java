@@ -126,7 +126,7 @@ class SkillBuilderTest {
     private Agent newAgent(List<String> builtIns) throws Exception {
         EnvironmentInfo environment = new EnvironmentInfo(dir.resolve("environment.json"),
                 command -> "exit code: 0\n--- stdout ---\nv1 of " + command, Clock.systemUTC());
-        ToolRegistry tools = ToolRegistry.of(new FileTools(), new net.rka.ai.tools.OutlineTools(), new net.rka.ai.tools.JavaTools(), new TerminalTools(), new CodingTools(), new SkillTools());
+        ToolRegistry tools = ToolRegistry.of(new FileTools(), new net.rka.ai.tools.OutlineTools(), new net.rka.ai.tools.JavaTools(), new TerminalTools(), new CodingTools(), new net.rka.ai.tools.WebTools(), new SkillTools());
         SkillLoader loader = new SkillLoader(skillsDir, builtIns,
                 new SkillValidator(Agent.kinds(new CodingGraph.Setup(environment, 600)), tools));
         return new Agent("test", "scripted", model, Tracing.off(), tools, approver, loader, new LiveChannel());

@@ -83,7 +83,7 @@ class SkillGraphTest {
     void setUp() {
         model = new ScriptedModel();
         tracer = OpenTelemetry.noop().getTracer("test");
-        toolCalls = new ToolCallRunner(tracer, ToolRegistry.of(new FileTools(), new CodingTools()));
+        toolCalls = new ToolCallRunner(tracer, ToolRegistry.of(new FileTools(), new CodingTools(), new net.rka.ai.tools.WebTools()));
     }
 
     /** Builds and compiles the skill; validated first, like the loader does, unless {@code validate} is false. */

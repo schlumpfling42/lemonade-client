@@ -1032,8 +1032,8 @@ public class AgentGraph {
     Map<String, Object> callModel(State state) {
         // A call that the analysis added (the job's start, or a tool it wants the result of) is open: nothing to ask, the router sends it on
         if (!state.unansweredToolCalls().isEmpty()) return Map.of();
-        // A job that succeeded has told the user itself (its report is the answer, see CodingGraph.answer): no model call to word it again
-        if (state.messages().getLast() instanceof AiMessage last && !last.hasToolExecutionRequests() && jobStartedThisTurn(state.messages())) return Map.of();
+        // A skill that has told the user itself (a job that succeeded, a finish with `say`) leaves nothing to word again: no model call
+        if (state.messages().getLast() instanceof AiMessage last && !last.hasToolExecutionRequests()) return Map.of();
         boolean lastRound = state.agentToolRounds() >= MAX_AGENT_ROUNDS;
         // The conversation + the tool list; the model decides whether to answer or call tools
         List<ChatMessage> messages = agentMessages(state);

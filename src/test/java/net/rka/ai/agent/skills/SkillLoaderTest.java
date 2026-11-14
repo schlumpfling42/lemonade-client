@@ -20,7 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /** Parsing skill files, the validator's rules, and loading a folder where some files are broken. */
 class SkillLoaderTest {
 
-    private final ToolRegistry tools = ToolRegistry.of(new FileTools(), new TerminalTools(), new CodingTools());
+    private final ToolRegistry tools = ToolRegistry.of(new FileTools(), new TerminalTools(), new CodingTools(), new net.rka.ai.tools.WebTools());
     private final SkillValidator validator = new SkillValidator(GenericKinds.all(), tools);
 
     @TempDir

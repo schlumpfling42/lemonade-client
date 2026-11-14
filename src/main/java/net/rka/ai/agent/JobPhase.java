@@ -12,9 +12,9 @@ import java.util.Set;
 enum JobPhase {
 
     /** Which files does the job need: the file list is the material. */
-    PICK_FILES(Set.of(Part.GOAL, Part.FOLDER, Part.MAP), 0),
+    PICK_FILES(Set.of(Part.GOAL, Part.FOLDER, Part.MAP), 0, true),
     /** What changes where: the folder's layout (new files), the environment (build and test commands), the research notes. */
-    PLAN(Set.of(Part.GOAL, Part.FOLDER, Part.ENVIRONMENT, Part.MAP, Part.NOTES), 6_000),
+    PLAN(Set.of(Part.GOAL, Part.FOLDER, Part.ENVIRONMENT, Part.MAP, Part.NOTES), 6_000, true),
     /** The check of a plan before the user sees it: the request, the research notes and the plan. */
     PLAN_CHECK(Set.of(Part.GOAL, Part.FOLDER, Part.MAP, Part.NOTES), 6_000),
     /** The plan again after the user's remarks: as the plan. */
@@ -35,10 +35,21 @@ enum JobPhase {
 
     private final Set<Part> parts;
     private final int notesChars;
+    private final boolean history;
 
     JobPhase(Set<Part> parts, int notesChars) {
+        this(parts, notesChars, false);
+    }
+
+    JobPhase(Set<Part> parts, int notesChars, boolean history) {
         this.parts = EnumSet.copyOf(parts);
         this.notesChars = notesChars;
+        this.history = history;
+    }
+
+    /** Whether the call gets the conversation before the job ({@link JobHistory}): the phases that decide what the job is about do; an edit has its plan. */
+    boolean history() {
+        return history;
     }
 
     boolean uses(Part part) {

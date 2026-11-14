@@ -16,6 +16,25 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class WebToolsTest {
 
     @Test
+    void aDownloadRefusesLocalAddressesAndPathsOutsideTheFolderAndLeavesNothing(@org.junit.jupiter.api.io.TempDir java.nio.file.Path folder) throws Exception {
+        var parameters = dev.langchain4j.invocation.InvocationParameters.from(WorkFolder.PARAMETER, folder);
+        var tools = new WebTools();
+
+        assertThrows(Exception.class, () -> tools.downloadFile("http://127.0.0.1:9/file.bin", "gradle/file.bin", parameters));
+        assertThrows(Exception.class, () -> tools.downloadFile("https://example.com/file.bin", "../outside.bin", parameters));
+        try (var files = java.nio.file.Files.walk(folder)) {
+            assertEquals(java.util.List.of(folder), files.toList(), "no file, no half-written .part file");
+        }
+    }
+
+    @Test
+    void everyDownloadIsAskedOfTheUser() {
+        assertTrue(ToolRegistry.of(new WebTools()).specifications().stream().anyMatch(t -> t.name().equals("downloadFile")));
+        assertTrue(ToolRegistry.of(new WebTools()).needsApproval(
+                dev.langchain4j.agent.tool.ToolExecutionRequest.builder().name("downloadFile").arguments("{}").build(), TrustedCommands.of(java.util.List.of()), false));
+    }
+
+    @Test
     void formatsSearxngResults() throws Exception {
         String json = """
                 {"results": [

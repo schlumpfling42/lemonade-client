@@ -473,6 +473,7 @@ public class FileTools {
                     required = false) Boolean overwrite,
             InvocationParameters parameters) throws IOException {
         Path file = WorkFolder.resolveInside(parameters, path);
+        BinaryFiles.refusalForPath(path).ifPresent(reason -> { throw new IllegalArgumentException(reason); });
         if (Files.isDirectory(file)) throw new IllegalArgumentException("Is a directory: " + path);
         // A model that writes a file it never read replaces code it hasn't seen (and spends minutes writing
         // every line again): replacing takes an explicit overwrite, and the error points to editSection

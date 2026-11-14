@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
+import dev.langchain4j.invocation.InvocationParameters;
 import net.rka.ai.config.Env;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
@@ -20,6 +21,12 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 import java.time.Duration;
 import java.util.Locale;
 import java.util.Optional;
@@ -155,6 +162,82 @@ public class WebTools {
             // e.g. "text/html; charset=utf-8": decides how to decode and parse the bytes
             String type = response.headers().firstValue("Content-Type").orElse("text/html").toLowerCase(Locale.ROOT);
             return toText(uri, type, body);
+        }
+    }
+
+    /** The largest file downloadFile saves. */
+    static final long MAX_FILE_BYTES = 500L * 1024 * 1024;
+
+    /**
+     * Saves a public file into the working folder. It reads the whole body (no time limit of its own besides the connection and a
+     * stall of 60 s), writes it to a temporary name, and only when the byte count matches what the server announced moves it to the
+     * target: a transfer that broke leaves nothing behind and says how far it got. Same address rules as {@link #fetchPage}.
+     */
+    @WritesFiles
+    @RequiresApproval
+    @Tool("Downloads a file from a public http(s) address into the working folder (every download is asked of the user first). Use it for"
+            + " files a command cannot fetch reliably: commands stop after 60 seconds and leave a half-written file. It answers with the size"
+            + " received against the size the server announced and the SHA-256 of the file, or fails and leaves no file")
+    public String downloadFile(
+            @P("the file URL, e.g. https://example.com/tool.zip") String url,
+            @P("target file path relative to the working folder, e.g. gradle/wrapper/gradle-wrapper.jar") String path,
+            InvocationParameters parameters) throws IOException, InterruptedException {
+        Path target = WorkFolder.resolveInside(parameters, path);
+        URI uri = checkPublicUrl(url);
+        for (int redirects = 0; ; redirects++) {
+            HttpResponse<InputStream> response = http.send(HttpRequest.newBuilder(uri)
+                            .timeout(Duration.ofSeconds(60)) // until the response starts; the body may take longer
+                            .header("User-Agent", USER_AGENT).GET().build(),
+                    HttpResponse.BodyHandlers.ofInputStream());
+            int status = response.statusCode();
+            if (status >= 300 && status < 400) {
+                response.body().close();
+                Optional<String> location = response.headers().firstValue("Location");
+                if (location.isEmpty() || redirects >= MAX_REDIRECTS) throw new IOException("Too many redirects, or a redirect without a target, at " + uri);
+                uri = checkPublicUrl(uri.resolve(location.get()).toString());
+                continue;
+            }
+            if (status >= 400) {
+                response.body().close();
+                throw new IOException("HTTP " + status + " for " + uri);
+            }
+            long announced = response.headers().firstValueAsLong("Content-Length").orElse(-1);
+            if (announced > MAX_FILE_BYTES) {
+                response.body().close();
+                throw new IOException("The file is " + announced + " bytes, more than the " + MAX_FILE_BYTES + " that are saved");
+            }
+            Files.createDirectories(target.getParent());
+            Path part = target.resolveSibling(target.getFileName() + ".part");
+            long received = 0;
+            MessageDigest digest = newDigest();
+            try (InputStream in = response.body(); var out = Files.newOutputStream(part)) {
+                byte[] buffer = new byte[64 * 1024];
+                for (int n; (n = in.read(buffer)) >= 0; ) {
+                    received += n;
+                    if (received > MAX_FILE_BYTES) throw new IOException("The file is larger than the " + MAX_FILE_BYTES + " bytes that are saved");
+                    out.write(buffer, 0, n);
+                    digest.update(buffer, 0, n);
+                }
+            } catch (IOException e) {
+                Files.deleteIfExists(part);
+                throw new IOException("The transfer broke after " + received + " bytes" + (announced >= 0 ? " of " + announced : "")
+                        + " (" + e.getMessage() + "); nothing was saved", e);
+            }
+            if (announced >= 0 && received != announced) {
+                Files.deleteIfExists(part);
+                throw new IOException("Incomplete: received " + received + " of " + announced + " bytes; nothing was saved");
+            }
+            Files.move(part, target, StandardCopyOption.REPLACE_EXISTING);
+            return "Downloaded " + received + " bytes to " + path + (announced >= 0 ? " (the server announced " + announced + ")" : " (the server announced no size)")
+                    + ". SHA-256 " + HexFormat.of().formatHex(digest.digest());
+        }
+    }
+
+    private static MessageDigest newDigest() {
+        try {
+            return MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e); // every Java has SHA-256
         }
     }
 

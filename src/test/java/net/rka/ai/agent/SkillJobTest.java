@@ -175,6 +175,27 @@ class SkillJobTest {
     }
 
     @Test
+    void aFinishWithSayIsTheReplyAndTheAgentMakesNoCallToWordItAgain() throws Exception {
+        skill("greetsay", """
+                { "name": "greetsay", "description": "%s",
+                  "start": "hello",
+                  "nodes": [
+                    { "id": "hello", "kind": "model", "prompt": "Greet.", "output": "greeting", "next": "done" },
+                    { "id": "done", "kind": "finish", "result": "result: {{greeting}}", "say": "{{greeting}}" } ] }
+                """.formatted(DESCRIPTION));
+        agent = newAgent(List.of(), Map.of());
+        answers(AiMessage.from(List.of(call("s1", "skill_greetsay", "{}"))));
+        answers("Hello, Bob!");
+
+        List<ChatMessage> produced = run("greet");
+
+        assertEquals("result: Hello, Bob!", result(produced, "s1").orElseThrow().text());
+        assertEquals("Hello, Bob!", ((AiMessage) produced.getLast()).text());
+        assertEquals(2, model.requests.size(), "the call and the skill's own model node, nothing after the skill");
+        assertTrue(model.answers.isEmpty());
+    }
+
+    @Test
     void aSkillThatFailsToBuildIsLeftOutAndListed() throws Exception {
         greetSkill();
         brittleSkill();

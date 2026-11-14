@@ -479,7 +479,7 @@ class CodingJobTest {
         EnvironmentInfo environment = new EnvironmentInfo(dir.resolve("environment.json"),
                 command -> "exit code: 0", Clock.systemUTC());
         Agent withPlans = new Agent("test", "scripted", model, Tracing.off(),
-                ToolRegistry.of(new FileTools(), new net.rka.ai.tools.OutlineTools(), new net.rka.ai.tools.JavaTools(), new TerminalTools(), new CodingTools()), approver, environment,
+                ToolRegistry.of(new FileTools(), new net.rka.ai.tools.OutlineTools(), new net.rka.ai.tools.JavaTools(), new TerminalTools(), new CodingTools(), new CodingGraphTest.FakeWebTools()), approver, environment,
                 new LiveChannel(), plans);
         model.answers.add(AiMessage.from(START));
         answers(PLAN, EDIT);
@@ -555,7 +555,7 @@ class CodingJobTest {
         assertEquals("use the Kotlin DSL", revised.userComment()); // read before the plan approval step clears it
         assertTrue(revised.toMarkdown().startsWith("Revised plan: you asked: use the Kotlin DSL"), revised.toMarkdown());
         ChatRequest replan = model.requests.get(3); // agent, plan, the reading of the comment, then the revision
-        assertTrue(replan.messages().get(1) instanceof UserMessage u && u.singleText().startsWith(codingPrompt("plan")));
+        assertTrue(replan.messages().getLast() instanceof UserMessage u && u.singleText().startsWith(codingPrompt("plan")));
         assertTrue(text(replan).contains("use the Kotlin DSL"), text(replan));
         assertEquals(3, produced.size(), produced.toString());
         assertTrue(((ToolExecutionResultMessage) produced.get(1)).text().startsWith("Done"));

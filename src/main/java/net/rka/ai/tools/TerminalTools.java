@@ -64,6 +64,7 @@ public class TerminalTools {
                     + "leave empty for the working folder", required = false)
             String workingDirectory,
             InvocationParameters parameters) throws Exception { // filled in by LangChain4j, hidden from the model
+        BinaryFiles.refusalForCommand(command).ifPresent(reason -> { throw new IllegalArgumentException(reason); });
         Path folder = WorkFolder.of(parameters);
         Path dir = workingDirectory == null || workingDirectory.isBlank()
                 ? folder

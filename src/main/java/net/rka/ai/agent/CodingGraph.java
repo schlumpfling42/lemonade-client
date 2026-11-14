@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.ToolExecutionResultMessage;
 import dev.langchain4j.data.message.UserMessage;
@@ -2747,9 +2748,12 @@ public final class CodingGraph {
                                      ToolSpecification function) {
         Map<JobPhase.Part, String> parts = openingParts(state);
         AgentLog.current().line(JobContext.describe(phase, parts));
+        List<ChatMessage> messages = new ArrayList<>();
+        messages.add(SystemMessage.from(JobContext.compose(phase, parts)));
+        if (phase.history()) messages.addAll(JobHistory.of(state.messages())); // what the user and the assistant said before the job
+        messages.add(UserMessage.from(prompt.isBlank() ? instructions : instructions + "\n\n" + prompt));
         ChatRequest.Builder request = ChatRequest.builder()
-                .messages(SystemMessage.from(JobContext.compose(phase, parts)),
-                        UserMessage.from(prompt.isBlank() ? instructions : instructions + "\n\n" + prompt))
+                .messages(messages)
                 .parameters(effort == null ? null : Effort.parameters(effort));
         if (maxTokens != null) request.maxOutputTokens(maxTokens);
         if (function != null) request.toolSpecifications(function).toolChoice(ToolChoice.REQUIRED);

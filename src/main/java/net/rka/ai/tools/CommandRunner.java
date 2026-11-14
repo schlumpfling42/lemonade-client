@@ -123,7 +123,9 @@ final class CommandRunner {
                 process.descendants().forEach(ProcessHandle::destroyForcibly);
                 process.destroyForcibly();
                 throw new IllegalStateException("Command timed out after " + timeout.toSeconds()
-                        + "s and was stopped. Partial output:\n" + tail(read(stdout)));
+                        + "s and was stopped. It did not finish: anything it was still writing (a download, an archive, a build output) is incomplete"
+                        + " and must not be used; to fetch a file call downloadFile, which checks that it arrived whole. Partial output:\n"
+                        + tail(read(stdout)));
             }
             // A non-zero exit code is NOT an exception: the model gets the code and stderr and can react
             return "exit code: " + process.exitValue()

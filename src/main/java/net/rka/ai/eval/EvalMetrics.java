@@ -22,7 +22,7 @@ public record EvalMetrics(int llmCalls, double llmSeconds, long tokensIn, long t
                           int changesApplied, int changesRefused, int repeats, double openingKchars, boolean triagedCoding,
                           Map<String, Integer> callsByPhase) {
 
-    private static final Pattern LLM = Pattern.compile("← LLM #\\d+ \\[([^\\]]+)\\] ([\\d.]+) s in all, tokens in ([\\d,?]+) / out ([\\d,?]+)");
+    private static final Pattern LLM = Pattern.compile("← LLM #\\d+ \\[([^\\]]+)\\] ([\\d.]+) s in all, tokens in ([\\d,?]+)(?: \\([\\d,?]+ cached\\))? / out ([\\d,?]+)");
     private static final Pattern TOOL = Pattern.compile("⚙ tool (\\w+) .*→ (ok|error)");
     private static final Pattern CTX = Pattern.compile("ctx \\w+: .*= ([\\d.]+)k chars");
 

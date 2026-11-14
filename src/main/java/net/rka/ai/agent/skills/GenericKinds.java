@@ -554,7 +554,7 @@ public final class GenericKinds {
     /** Asks the model; with {@code tools}, a ReAct loop. The answer goes to {@code output}. */
     private static final class Model extends Spec {
         Model() {
-            super("model", Set.of("prompt"), Set.of("tools", "output", "format", "thinking", "maxTokens", "effort"));
+            super("model", Set.of("prompt"), Set.of("tools", "output", "format", "thinking", "maxTokens", "effort", "history"));
         }
 
         @Override
@@ -569,6 +569,8 @@ public final class GenericKinds {
             oneOf(node, "format", Set.of("text", "json"), errors);
             oneOf(node, "thinking", Set.of("shown", "progress"), errors);
             oneOf(node, "effort", net.rka.ai.agent.Effort.LEVELS, errors);
+            Object history = node.fields().get("history");
+            if (history != null && !(history instanceof Boolean)) errors.add(where(node) + "`history` must be true or false.");
             Object maxTokens = node.fields().get("maxTokens");
             if (maxTokens != null && !(maxTokens instanceof Integer n && n >= 50 && n <= 32_000)) {
                 errors.add(where(node) + "`maxTokens` must be a whole number from 50 to 32000.");
@@ -599,6 +601,7 @@ public final class GenericKinds {
             Set<String> tools = listedTools(node, runtime.toolCalls().tools());
             int maxRounds = runtime.skill().limits().maxToolRounds();
             Integer maxTokens = node.fields().get("maxTokens") instanceof Integer n ? n : null; // null: the model's own limit
+            boolean history = Boolean.TRUE.equals(node.fields().get("history")); // the conversation before the skill, in front of the prompt
             String system = runtime.skill().description() + "\n\n" + PREAMBLE;
             return (state, config) -> {
                 boolean continuing = continuesVisit(state, node.id());
@@ -608,6 +611,7 @@ public final class GenericKinds {
                 if (!continuing) added.add(UserMessage.from(Templates.render(prompt, vars(state))));
                 List<ChatMessage> messages = new ArrayList<>();
                 messages.add(SystemMessage.from(system));
+                if (history) messages.addAll(net.rka.ai.agent.JobHistory.of(state.messages()));
                 if (continuing) messages.addAll(net.rka.ai.agent.RollingResults.apply(net.rka.ai.agent.ContextGroom.apply(visitMessages(state)))); // the prompt, the calls and their results
                 messages.addAll(added);
 
@@ -1084,12 +1088,13 @@ public final class GenericKinds {
     /** Ends the skill; {@code result} becomes the call's result, an error result when {@code error} is true. */
     private static final class Finish extends Spec {
         Finish() {
-            super("finish", Set.of("result"), Set.of("error"));
+            super("finish", Set.of("result"), Set.of("error", "say"));
         }
 
         @Override
         void checkFields(NodeSpec node, List<String> errors) {
             text(node, "result", errors);
+            if (node.fields().containsKey("say")) text(node, "say", errors);
             Object error = node.fields().get("error");
             if (error != null && !(error instanceof Boolean)) errors.add(where(node) + "`error` must be true or false.");
         }
@@ -1101,15 +1106,31 @@ public final class GenericKinds {
 
         @Override
         public Set<String> reads(NodeSpec node) {
-            return templateReads(node, "result");
+            Set<String> reads = new java.util.HashSet<>(templateReads(node, "result"));
+            if (node.fields().containsKey("say")) reads.addAll(templateReads(node, "say"));
+            return reads;
         }
 
-        /** Answers the skill's call in the conversation with the rendered result. */
+        /**
+         * Answers the skill's call in the conversation with the rendered result. With {@code say}, the rendered text is also the
+         * reply to the user, and the agent makes no model call to word it again.
+         */
         @Override
         public NodeActionWithConfig<State> action(NodeSpec node, SkillRuntime runtime) {
             String result = (String) node.fields().get("result");
+            String say = (String) node.fields().get("say");
             boolean error = Boolean.TRUE.equals(node.fields().get("error"));
-            return (state, config) -> answer(runtime.skill(), state, Templates.render(result, vars(state)), error);
+            return (state, config) -> {
+                Map<String, Object> update = answer(runtime.skill(), state, Templates.render(result, vars(state)), error);
+                if (say == null) return update;
+                String reply = Templates.render(say, vars(state)).strip();
+                if (reply.isEmpty()) return update;
+                List<ChatMessage> messages = new ArrayList<>((List<ChatMessage>) update.get(State.MESSAGES));
+                messages.add(AiMessage.from(reply));
+                Map<String, Object> both = new HashMap<>(update);
+                both.put(State.MESSAGES, messages);
+                return both;
+            };
         }
 
         /** Never asked: a finish has no outcomes, the builder ends the subgraph after it. */

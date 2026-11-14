@@ -234,13 +234,19 @@ public final class ToolCallRunner {
      * One line per tool call in the agent log (the step that ran it, the arguments, ok/error, the result's
      * size and how long it took); at {@code AGENT_LOG=full} also the whole result.
      */
+    /** ", exit code N" for a command that failed (the call itself ran, so it is "ok" to the runner): the log must not look like a pass. */
+    private static String exitCode(String text) {
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("^exit code: (-?\\d+)").matcher(text);
+        return m.find() && !m.group(1).equals("0") ? ", exit code " + m.group(1) : "";
+    }
+
     private void log(ToolExecutionRequest call, ToolExecutionResultMessage result, long nanos) {
         AgentLog log = AgentLog.current();
         if (!log.on()) return;
         boolean failed = Boolean.TRUE.equals(result.isError());
         log.line("⚙ tool " + call.name() + " [" + live.node() + "] " + AgentLog.oneLine(call.arguments(), 160)
                 + " → " + (failed ? "error: " + AgentLog.oneLine(result.text(), 160)
-                        : "ok, " + String.format(java.util.Locale.ROOT, "%,d", result.text().length()) + " chars")
+                        : "ok, " + String.format(java.util.Locale.ROOT, "%,d", result.text().length()) + " chars" + exitCode(result.text()))
                 + ", " + AgentLog.duration(nanos));
         if (log.full()) log.block("   result of " + call.name() + " (" + call.id() + ")", result.text());
     }
