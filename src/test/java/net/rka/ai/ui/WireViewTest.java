@@ -59,7 +59,7 @@ class WireViewTest {
     @Test
     void aCallIsListedWithItsSizeAndTokensAndNothingWaits() throws Exception {
         WireGate gate = new WireGate();
-        WireView view = onFx(() -> inScene(new WireView(gate, new UiState(), () -> { }, () -> { })));
+        WireView view = onFx(() -> inScene(new WireView(gate, new UiState(), new WireLog(java.nio.file.Path.of(System.getProperty("java.io.tmpdir"), "wire-test-" + System.nanoTime())), () -> { }, () -> { })));
 
         onFx(() -> {
             view.showRequest(1, REQUEST);
@@ -75,7 +75,7 @@ class WireViewTest {
     void aHeldRequestWaitsUntilSendAndGoesOnWithTheChangedText() throws Exception {
         WireGate gate = new WireGate();
         boolean[] revealed = {false};
-        WireView view = onFx(() -> inScene(new WireView(gate, new UiState(), () -> revealed[0] = true, () -> { })));
+        WireView view = onFx(() -> inScene(new WireView(gate, new UiState(), new WireLog(java.nio.file.Path.of(System.getProperty("java.io.tmpdir"), "wire-test-" + System.nanoTime())), () -> revealed[0] = true, () -> { })));
         CompletableFuture<ChatRequest> answer = new CompletableFuture<>();
 
         onFx(() -> {
@@ -96,9 +96,66 @@ class WireViewTest {
     }
 
     @Test
+    void everyConversationHasItsOwnCallsAndTheyComeBackAfterARestart() throws Exception {
+        java.nio.file.Path folder = java.nio.file.Files.createTempDirectory("wire-test");
+        WireGate gate = new WireGate();
+        WireView view = onFx(() -> inScene(new WireView(gate, new UiState(), new WireLog(folder), () -> { }, () -> { })));
+
+        gate.conversation("a");
+        onFx(() -> {
+            view.showConversation("a", "first");
+            view.showRequest(1, REQUEST);
+            view.showResponse(1, RESPONSE);
+            view.showConversation("b", null);
+            return null;
+        });
+        assertEquals(java.util.List.of(), onFx(view::callLines), "another conversation starts without the calls of the first");
+        gate.conversation("b");
+        onFx(() -> {
+            view.showRequest(2, REQUEST);
+            view.showResponse(2, RESPONSE);
+            view.showConversation("a", "first");
+            return null;
+        });
+        assertEquals(1, onFx(() -> view.callLines().size()));
+        assertTrue(onFx(() -> view.callLines().getFirst()).startsWith("#1"));
+
+        // a new run of the app: nothing in memory, the calls are read from the folder
+        Thread.sleep(300); // the saving is done in the background
+        WireView again = onFx(() -> inScene(new WireView(new WireGate(), new UiState(), new WireLog(folder), () -> { }, () -> { })));
+        onFx(() -> {
+            again.showConversation("b", "second");
+            return null;
+        });
+        assertTrue(onFx(() -> again.callLines().getFirst()).startsWith("#2"));
+    }
+
+    @Test
+    void aHeldCallOfAnotherConversationTakesTheListUntilItIsDealtWithThenTheOpenOneComesBack() throws Exception {
+        WireGate gate = new WireGate();
+        WireView view = onFx(() -> inScene(new WireView(gate, new UiState(), new WireLog(java.nio.file.Files.createTempDirectory("wire-test")), () -> { }, () -> { })));
+        gate.conversation("a");
+        CompletableFuture<ChatRequest> answer = new CompletableFuture<>();
+        onFx(() -> {
+            view.showConversation("b", "open one");
+            view.askRequest(3, REQUEST, answer);
+            return null;
+        });
+        assertEquals(1, onFx(() -> view.callLines().size()), "the held call of conversation a is on the list");
+
+        onFx(() -> {
+            button(view, "Send").fire();
+            view.idle();
+            return null;
+        });
+
+        assertEquals(java.util.List.of(), onFx(view::callLines), "conversation b is open again, with its own (no) calls");
+    }
+
+    @Test
     void anOlderCallCanBeLookedAtAfterANewerOneArrived() throws Exception {
         WireGate gate = new WireGate();
-        WireView view = onFx(() -> inScene(new WireView(gate, new UiState(), () -> { }, () -> { })));
+        WireView view = onFx(() -> inScene(new WireView(gate, new UiState(), new WireLog(java.nio.file.Path.of(System.getProperty("java.io.tmpdir"), "wire-test-" + System.nanoTime())), () -> { }, () -> { })));
 
         onFx(() -> {
             view.showRequest(1, REQUEST);

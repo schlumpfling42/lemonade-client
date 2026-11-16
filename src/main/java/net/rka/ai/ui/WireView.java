@@ -19,17 +19,26 @@ import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
 import net.rka.ai.agent.WireCodec;
 
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
- * The sidebar of the chat window with the traffic of the model: every call, what was sent and what came back, as text. The calls are
- * listed (the newest is shown while it happens, an older one is shown when it is picked), and a call can be held: the request waits
- * to be changed and sent, the answer waits to be changed and used.
+ * The sidebar of the chat window with the traffic of the model: the calls of the open conversation, what was sent and what came back, as
+ * text. Every call belongs to the conversation whose turn made it ({@link WireGate#conversation}); the list shows the calls of the
+ * conversation that is open, and another conversation brings its own (also after a restart: {@link WireLog}). The newest call is shown
+ * while it happens, an older one when it is picked, and a call can be held: the request waits to be changed and sent, the answer waits to
+ * be changed and used.
  *
  * <pre>
- *   ┌ Call 7 · answered (2,572 tokens in, 103 out) ───────────────────┐
- *   │ #7 · 3 messages · 1 tool · 2,572 in / 103 out        ← the calls │
+ *   ┌ Conversation: add subtract ─────────────────────────────────────┐
+ *   │ Call 7 · answered (2,572 tokens in, 103 out)                     │
+ *   │ #7 · 3 messages · 1 tools · 2,572 in / 103 out      ← the calls  │
  *   │ #6 · 2 messages · 0 tools · 601 in / 19 out                      │
  *   ├ Call 7 · settings of the call                      [Tools…]      │
  *   │ === system === …  (the whole request, editable while held)       │
@@ -42,23 +51,27 @@ import java.util.concurrent.CompletableFuture;
  * It only shows and asks; the waiting is done by {@link WireGate}, which completes the futures the view is given. Everything here runs
  * on the FX thread. The text is read by {@link WireCodec}, which also turns the edited text back into a request or an answer; a text that
  * does not read is told back here and the call stays held. Nothing is held until a box is ticked, so the view can stay open as a log.
+ * A held call keeps the view on its conversation until it is dealt with, whatever conversation is opened meanwhile.
  */
 final class WireView extends VBox {
 
-    /** The calls kept in the list. */
+    /** The calls kept in the list of a conversation. */
     private static final int MAX_CALLS = 200;
 
     /** One call as the view keeps it: the texts shown for it, and its line in the list. */
     private static final class Call {
         final int n;
-        ChatRequest request;
+        final String conversation;
+        ChatRequest request; // only while the app runs: a call loaded from disk has the texts only
         String requestText = "";
         String settingsText = "";
         String responseText = "";
+        String toolsText = "";
         String line;
 
-        Call(int n) {
+        Call(int n, String conversation) {
             this.n = n;
+            this.conversation = conversation;
             this.line = "#" + n;
         }
 
@@ -66,12 +79,19 @@ final class WireView extends VBox {
         public String toString() {
             return line;
         }
+
+        WireLog.Entry entry() {
+            return new WireLog.Entry(n, line, settingsText, requestText, responseText, toolsText);
+        }
     }
 
+    private final WireGate gate;
+    private final WireLog log;
+    private final Label conversationLabel = new Label();
     private final Label status = new Label("Waiting for the first call of the model.");
     private final Label settings = new Label();
-    private final ObservableList<Call> calls = FXCollections.observableArrayList();
-    private final ListView<Call> list = new ListView<>(calls);
+    private final Map<String, ObservableList<Call>> byConversation = new HashMap<>();
+    private final ListView<Call> list = new ListView<>();
     private final TextArea requestArea = new TextArea();
     private final TextArea responseArea = new TextArea();
     private final Label requestProblem = new Label();
@@ -84,7 +104,17 @@ final class WireView extends VBox {
     private final Button responseReset = new Button("Back to the original");
     private final Button responseCancel = new Button("Cancel the call");
     private final Runnable reveal;
+    /** Writes the calls to disk one after the other, off the FX thread. */
+    private final ExecutorService saver = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "traffic-saver");
+        t.setDaemon(true);
+        return t;
+    });
 
+    /** The conversation that is open in the chat, and the one whose calls the list shows (a held call of another one takes the list for a while). */
+    private String openId = "";
+    private String openTitle = "New conversation";
+    private String displayed = "";
     private Call live;
     private Call shown;
     private ChatRequest shownRequest;
@@ -98,11 +128,14 @@ final class WireView extends VBox {
     /**
      * @param gate   the gate whose calls are shown; the view attaches itself
      * @param ui     where the two hold boxes are remembered
+     * @param log    where the calls of each conversation are kept
      * @param reveal called when a call is held, so the sidebar can open itself: a held call waits for the person
      * @param saved  called when a box changes, to save the state
      */
-    WireView(WireGate gate, UiState ui, Runnable reveal, Runnable saved) {
+    WireView(WireGate gate, UiState ui, WireLog log, Runnable reveal, Runnable saved) {
         super(6);
+        this.gate = gate;
+        this.log = log;
         this.reveal = reveal;
         gate.attach(this);
         for (TextArea area : new TextArea[]{requestArea, responseArea}) {
@@ -115,6 +148,7 @@ final class WireView extends VBox {
         settings.setStyle("-fx-text-fill: #555;");
         status.setStyle("-fx-font-weight: bold;");
         status.setWrapText(true);
+        conversationLabel.setStyle("-fx-font-weight: bold; -fx-font-size: 14;");
 
         list.setPrefHeight(130);
         list.setMinHeight(60);
@@ -160,21 +194,87 @@ final class WireView extends VBox {
         split.setOrientation(Orientation.VERTICAL);
         split.setDividerPositions(0.55);
         VBox.setVgrow(split, Priority.ALWAYS);
-        getChildren().addAll(status, list, split, new VBox(4, new HBox(16, holdRequests, holdResponses), help));
+        getChildren().addAll(conversationLabel, status, list, split, new VBox(4, new HBox(16, holdRequests, holdResponses), help));
         setPadding(new Insets(10));
+        showOpen(); // the list shows the calls of the open conversation, from the start
         idle();
     }
 
-    /** The lines of the list of calls, oldest first (for the tests). */
-    java.util.List<String> callLines() {
-        return calls.stream().map(Call::toString).toList();
+    // ---- the conversations ----
+
+    /**
+     * Shows the calls of a conversation (the open one). A held call keeps the view where it is; the switch is made when it is dealt with.
+     *
+     * @param title the conversation's name, or null for a new one
+     */
+    void showConversation(String id, String title) {
+        openId = id;
+        openTitle = title == null || title.isBlank() ? "New conversation" : title;
+        if (requestAnswer == null && responseAnswer == null) showOpen();
+    }
+
+    private void showOpen() {
+        displayed = openId;
+        conversationLabel.setText("Conversation: " + openTitle);
+        ObservableList<Call> items = calls(openId);
+        list.setItems(items);
+        shown = null;
+        if (items.isEmpty()) {
+            settings.setText("");
+            requestArea.clear();
+            responseArea.clear();
+            requestArea.setEditable(false);
+            responseArea.setEditable(false);
+            tools.setDisable(true);
+            status.setText("No call of the model in this conversation yet.");
+        } else {
+            list.getSelectionModel().select(items.getLast());
+            list.scrollTo(items.getLast());
+            status.setText("Call " + items.getLast().n + " · " + items.size() + " calls of this conversation");
+        }
+    }
+
+    /** Forgets the calls of a deleted conversation. */
+    void forget(String id) {
+        byConversation.remove(id);
+        log.delete(id);
+    }
+
+    /** The calls of a conversation: those of this run, and before them those kept on disk. */
+    private ObservableList<Call> calls(String id) {
+        return byConversation.computeIfAbsent(id, key -> {
+            ObservableList<Call> loaded = FXCollections.observableArrayList();
+            for (WireLog.Entry e : log.load(key)) {
+                Call call = new Call(e.n(), key);
+                call.line = e.line();
+                call.settingsText = e.settings();
+                call.requestText = e.request();
+                call.responseText = e.response();
+                call.toolsText = e.tools() == null ? "" : e.tools();
+                loaded.add(call);
+            }
+            return loaded;
+        });
+    }
+
+    private void save(String conversation) {
+        ObservableList<Call> items = byConversation.get(conversation);
+        if (items == null) return;
+        List<WireLog.Entry> entries = new ArrayList<>(items.size());
+        for (Call call : items) entries.add(call.entry());
+        saver.execute(() -> log.save(conversation, entries));
+    }
+
+    /** The lines of the list of the open conversation, oldest first (for the tests). */
+    List<String> callLines() {
+        return list.getItems().stream().map(Call::toString).toList();
     }
 
     // ---- what the gate shows ----
 
     /** A request that is held: the person reads it, changes it and sends it, or cancels the call. */
     void askRequest(int n, ChatRequest request, CompletableFuture<ChatRequest> answer) {
-        showRequest(n, request);
+        show(n, request, true);
         requestAnswer = answer;
         requestArea.setEditable(true);
         setRequestControls(true);
@@ -185,25 +285,40 @@ final class WireView extends VBox {
 
     /** A request that goes without waiting, only shown. */
     void showRequest(int n, ChatRequest request) {
-        Call call = new Call(n);
+        show(n, request, false);
+    }
+
+    private void show(int n, ChatRequest request, boolean held) {
+        String conversation = gate.conversation();
+        Call call = new Call(n, conversation);
         call.request = request;
         call.requestText = WireCodec.requestText(request);
         call.settingsText = "Call " + n + " · " + WireCodec.settingsText(request);
+        call.toolsText = WireCodec.toolsText(request);
         call.line = "#" + n + " · " + request.messages().size() + (request.messages().size() == 1 ? " message" : " messages")
                 + " · " + (request.toolSpecifications() == null ? 0 : request.toolSpecifications().size()) + " tools";
         live = call;
-        calls.add(call);
-        if (calls.size() > MAX_CALLS) calls.remove(0);
+        ObservableList<Call> items = calls(conversation);
+        items.add(call);
+        if (items.size() > MAX_CALLS) items.remove(0);
         originalRequestText = call.requestText;
         shownRequest = request;
-        responseArea.clear();
         responseProblem.setText("");
         requestProblem.setText("");
         setRequestControls(false);
         setResponseControls(false);
-        display(call);
-        list.getSelectionModel().select(call); // follows the newest call; pick() ignores it as it is shown already
-        list.scrollTo(call);
+        lastKindWasThinking = false;
+        // A call of another conversation than the open one is kept for it and not shown, unless it is held: that one waits for the person
+        if (!conversation.equals(displayed) && held) {
+            displayed = conversation;
+            conversationLabel.setText("Conversation of the held call");
+            list.setItems(items);
+        }
+        if (conversation.equals(displayed)) {
+            display(call);
+            list.getSelectionModel().select(call); // follows the newest call; pick() ignores it as it is shown already
+            list.scrollTo(call);
+        }
     }
 
     /** The request has gone: the model writes, and what it writes appears as it arrives. */
@@ -246,6 +361,7 @@ final class WireView extends VBox {
             call.responseText = originalResponseText;
             if (!tokens.isEmpty()) call.line += " · " + tokens;
             list.refresh();
+            save(call.conversation);
         }
         if (call == null || shown == call) {
             responseArea.setText(originalResponseText);
@@ -266,6 +382,7 @@ final class WireView extends VBox {
         responseArea.setEditable(false);
         if (shownRequest == null) status.setText("Waiting for the first call of the model.");
         else if (!status.getText().contains("failed")) status.setText(status.getText() + " · waiting for the next call");
+        if (!displayed.equals(openId)) showOpen(); // a held call of another conversation had the list; the open one gets it back
     }
 
     /** The call failed (the server, a timeout, a stop). */
@@ -274,6 +391,7 @@ final class WireView extends VBox {
         if (live != null) {
             live.line += " · failed";
             list.refresh();
+            save(live.conversation);
         }
         setRequestControls(false);
         setResponseControls(false);
@@ -298,7 +416,7 @@ final class WireView extends VBox {
         requestArea.setEditable(false);
         responseArea.setText(call.responseText);
         responseArea.setEditable(false);
-        tools.setDisable(call.request == null);
+        tools.setDisable(call.toolsText.isEmpty());
     }
 
     private void sendRequest() {
@@ -325,7 +443,10 @@ final class WireView extends VBox {
             responseAnswer = null;
             setResponseControls(false);
             responseArea.setEditable(false);
-            if (live != null) live.responseText = responseArea.getText();
+            if (live != null) {
+                live.responseText = responseArea.getText();
+                save(live.conversation);
+            }
             answer.complete(parsed);
         } catch (IllegalArgumentException e) {
             responseProblem.setText(e.getMessage());
@@ -342,11 +463,11 @@ final class WireView extends VBox {
     }
 
     private void showTools() {
-        if (shown == null || shown.request == null) return;
+        if (shown == null || shown.toolsText.isEmpty()) return;
         Alert alert = new Alert(Alert.AlertType.NONE, "", javafx.scene.control.ButtonType.CLOSE);
         if (getScene() != null) alert.initOwner(getScene().getWindow());
         alert.setTitle("Tools of this request");
-        TextArea text = new TextArea(WireCodec.toolsText(shown.request));
+        TextArea text = new TextArea(shown.toolsText);
         text.setEditable(false);
         text.setPrefSize(700, 420);
         alert.getDialogPane().setContent(text);
@@ -357,7 +478,7 @@ final class WireView extends VBox {
         send.setDisable(!on);
         requestReset.setDisable(!on);
         requestCancel.setDisable(!on);
-        tools.setDisable(shown == null || shown.request == null);
+        tools.setDisable(shown == null || shown.toolsText.isEmpty());
     }
 
     private void setResponseControls(boolean on) {

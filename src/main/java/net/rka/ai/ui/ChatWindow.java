@@ -145,6 +145,7 @@ public class ChatWindow extends Application {
     private final WireGate wireGate = new WireGate();
     /** The sidebar on the right with the traffic of the model; its width is added to the window when it opens. */
     private final VBox trafficPanel = new VBox();
+    private WireView traffic;
     private static final double TRAFFIC_WIDTH = 520;
     private final javafx.scene.control.ToggleButton trafficToggle = new javafx.scene.control.ToggleButton("⇄ Model traffic");
 
@@ -283,7 +284,8 @@ public class ChatWindow extends Application {
         header.setAlignment(Pos.CENTER_LEFT);
         header.getStyleClass().add("header");
         buildSidebar(); // fills the sidebar VBox and loads the saved conversations
-        WireView traffic = new WireView(wireGate, ui, this::revealTraffic, ui::save);
+        traffic = new WireView(wireGate, ui, WireLog.fromEnv(), this::revealTraffic, ui::save);
+        traffic.showConversation(threadId, conversationTitle);
         VBox.setVgrow(traffic, Priority.ALWAYS);
         trafficPanel.getChildren().add(traffic);
         trafficPanel.setPrefWidth(TRAFFIC_WIDTH);
@@ -398,12 +400,16 @@ public class ChatWindow extends Application {
         history.add(UserMessage.from(text)); // the question becomes part of the conversation...
         addBubble("You", text, "user");      // ...and appears right away, before the answer
         // The first question names the conversation in the sidebar
-        if (conversationTitle == null) conversationTitle = ConversationStore.titleFrom(typed);
+        if (conversationTitle == null) {
+            conversationTitle = ConversationStore.titleFrom(typed);
+            traffic.showConversation(threadId, conversationTitle);
+        }
 
         // Capture everything the background task needs NOW, as immutable values. If the user switches
         // conversation or changes settings while it runs, the task still works on the original ones.
         List<ChatMessage> snapshot = List.copyOf(history);
         String thread = threadId;
+        wireGate.conversation(thread); // the calls of this turn belong to this conversation in the traffic sidebar
         String title = conversationTitle;
         Settings own = conversationSettings;
         // What this run uses: the conversation's folder, global + conversation trusted commands
@@ -1137,6 +1143,7 @@ public class ChatWindow extends Application {
         history = Agent.newConversation();
         threadId = Agent.newThreadId();   // new id = new file and new LangSmith thread
         conversationTitle = null;         // set from the first question
+        if (traffic != null) traffic.showConversation(threadId, null); // its own, still empty, calls
         conversationSettings = Settings.newConversation(globalSettings); // global default folder, no extra commands
         conversationSummary = ConversationSummary.EMPTY;                  // a new chat remembers nothing
         conversationFacts = List.of();
@@ -1301,6 +1308,7 @@ public class ChatWindow extends Application {
         boolean cutOff = repaired != conversation.messages() || (!repaired.isEmpty() && repaired.get(repaired.size() - 1) instanceof UserMessage);
         history = new ArrayList<>(repaired);
         threadId = conversation.id();
+        if (traffic != null) traffic.showConversation(threadId, conversation.title());
         ui.lastConversation = threadId;
         ui.save();
         conversationTitle = conversation.title();
@@ -1328,7 +1336,10 @@ public class ChatWindow extends Application {
             try {
                 Conversation c = store.load(summary.id()); // load, change the title, save back
                 store.save(c.withTitle(newTitle));
-                if (c.id().equals(threadId)) conversationTitle = newTitle;
+                if (c.id().equals(threadId)) {
+                    conversationTitle = newTitle;
+                    traffic.showConversation(threadId, newTitle);
+                }
             } catch (RuntimeException e) {
                 showError("Could not rename the conversation", e);
             }
@@ -1345,6 +1356,7 @@ public class ChatWindow extends Application {
         if (confirm.showAndWait().orElse(ButtonType.CANCEL) != ButtonType.OK) return;
         try {
             store.delete(summary.id());
+            traffic.forget(summary.id()); // its calls in the traffic sidebar go with it
         } catch (RuntimeException e) {
             showError("Could not delete the conversation", e);
         }

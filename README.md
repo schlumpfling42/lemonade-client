@@ -502,7 +502,7 @@ agent's tool loop ends by itself after twelve rounds and is not counted). The CL
 ## The model's traffic
 
 The button **⇄ Model traffic** in the header opens a sidebar on the right of the chat (it adds its width to the window, and the window and the
-sidebar come back as they were after a restart). It lists every call to the model of the running app (the newest is selected while it happens) and shows the one
+sidebar come back as they were after a restart). It lists the calls to the model of the open conversation (the newest is selected while it happens) and shows the one
 you pick:
 
 - **the request**: the whole thing the server receives (system message, every message, earlier tool calls and their results) as text with a
@@ -510,6 +510,10 @@ you pick:
   model, the numbers and the number of tools; **Tools…** lists them (they are sent as they are);
 - **the answer**: its thinking, its text and its tool calls (`=== thinking ===`, `=== text ===`, `=== tool calls ===` with a JSON list), as
   the model wrote them. While the model writes, the text shows here as it arrives.
+
+The calls belong to the conversation whose turn made them: another conversation brings its own list, and the newest 40 calls of each are
+kept in `~/chat/traffic/<conversation id>.json` (next to the conversations, removed with the conversation), so the sidebar of a conversation
+looks the same after a restart (`WireLog`). A held call of a conversation you have left takes the list until you deal with it.
 
 By default nothing is held: the sidebar only shows what goes to the model and what comes back. Tick **hold every request** and each request
 waits in the sidebar until you press **Send** (the sidebar opens itself when a call is held): change anything first, **Back to the original**

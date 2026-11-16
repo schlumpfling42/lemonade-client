@@ -27,11 +27,22 @@ public final class WireGate implements ModelGate {
     private final AtomicInteger counter = new AtomicInteger();
     private final ThreadLocal<Integer> number = new ThreadLocal<>();
     private volatile WireView window;
+    /** The conversation whose turn is running: the calls it makes belong to it. */
+    private volatile String conversation = "";
     private volatile boolean holdRequests;
     private volatile boolean holdResponses;
 
     void attach(WireView window) {
         this.window = window;
+    }
+
+    /** Called when a turn starts: the calls made until the next turn belong to this conversation (one turn runs at a time). */
+    void conversation(String id) {
+        this.conversation = id == null ? "" : id;
+    }
+
+    String conversation() {
+        return conversation;
     }
 
     void holdRequests(boolean hold) {
