@@ -20,7 +20,7 @@ public final class Effort {
     /** The request parameters that set the effort for one request. */
     public static OpenAiChatRequestParameters parameters(String level) {
         return OpenAiChatRequestParameters.builder()
-                .customParameters(Map.of("chat_template_kwargs", Map.of("reasoning_effort", level)))
+                .customParameters(Sampling.with(Map.of("chat_template_kwargs", Map.of("reasoning_effort", level))))
                 .build();
     }
 }

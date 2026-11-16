@@ -375,7 +375,7 @@ public final class Agent implements AutoCloseable {
      */
     static java.util.Map<String, Object> reasoningParameters() {
         String effort = Env.get("MODEL_REASONING_EFFORT", "low").strip();
-        return effort.isEmpty() ? java.util.Map.of() : java.util.Map.of("chat_template_kwargs", java.util.Map.of("reasoning_effort", effort));
+        return Sampling.with(effort.isEmpty() ? java.util.Map.of() : java.util.Map.of("chat_template_kwargs", java.util.Map.of("reasoning_effort", effort)));
     }
 
     /** The model server's context window ({@code MODEL_CONTEXT_TOKENS}, default 16384). */
@@ -423,7 +423,8 @@ public final class Agent implements AutoCloseable {
                     .baseUrl(baseUrl)
                     .apiKey(apiKey)
                     .modelName(modelName)
-                    .temperature(0.7)               // a low value makes the model likelier to repeat itself and get stuck
+                    .temperature(Sampling.temperature()) // a low value makes the model likelier to repeat itself and get stuck
+                    .topP(Sampling.topP())
                     .returnThinking(true)           // a reasoning model's thinking arrives as it's generated
                     .timeout(modelTimeout())         // local models can be slow: long prompts, long files to write
                     .maxTokens(maxOutputTokens())    // a runaway reply (a whole big file) stops instead of running for minutes
@@ -436,7 +437,8 @@ public final class Agent implements AutoCloseable {
                     .baseUrl(baseUrl)
                     .apiKey(apiKey)
                     .modelName(modelName)
-                    .temperature(0.7)
+                    .temperature(Sampling.temperature())
+                    .topP(Sampling.topP())
                     .returnThinking(true)           // a reasoning model's thinking comes back as AiMessage.thinking()
                     .timeout(modelTimeout())
                     .maxTokens(maxOutputTokens())
