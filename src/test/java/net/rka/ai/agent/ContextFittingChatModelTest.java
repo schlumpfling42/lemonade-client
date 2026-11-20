@@ -148,6 +148,35 @@ class ContextFittingChatModelTest {
     }
 
     @Test
+    void theEstimateLearnsFromThePromptSizeTheServerReportsInBothDirections() {
+        ChatRequest request = ChatRequest.builder().messages(UserMessage.from("x".repeat(3_600))).build();
+        // 3,600 characters counted as 900 tokens: 4 characters per token, so with the 10% margin 3.6
+        ChatModel prose = reporting(new dev.langchain4j.model.output.TokenUsage(900, 1));
+        ContextFittingChatModel model = new ContextFittingChatModel(prose, 16_384);
+        model.chat(request);
+        assertEquals(3.6, model.charsPerToken(), 0.01);
+        // 3,600 characters counted as 3,600 tokens: dense text, the estimate goes down (to the floor of 1.0)
+        ChatModel dense = reporting(new dev.langchain4j.model.output.TokenUsage(3_600, 1));
+        ContextFittingChatModel other = new ContextFittingChatModel(dense, 16_384);
+        other.chat(request);
+        assertEquals(1.0, other.charsPerToken(), 0.01);
+        // no usage reported: unchanged
+        ContextFittingChatModel silent = new ContextFittingChatModel(reporting(null), 16_384);
+        silent.chat(request);
+        assertEquals(3.0, silent.charsPerToken(), 0.0);
+    }
+
+    /** A server that answers "ok" and reports {@code usage} (none for null). */
+    private static ChatModel reporting(dev.langchain4j.model.output.TokenUsage usage) {
+        return new ChatModel() {
+            @Override
+            public ChatResponse chat(ChatRequest request) {
+                return ChatResponse.builder().aiMessage(AiMessage.from("ok")).tokenUsage(usage).build();
+            }
+        };
+    }
+
+    @Test
     void smallRequestsPassUnchanged() {
         FakeServer server = new FakeServer(1_000_000, 3);
         ChatRequest request = ChatRequest.builder().messages(UserMessage.from("hi")).build();

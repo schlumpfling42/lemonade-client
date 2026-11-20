@@ -151,7 +151,9 @@ final class ContextFittingChatModel implements ChatModel {
         Function<ChatRequest, ChatResponse> call = r -> answered(r, model);
         ChatRequest sent = fit(withoutEmptyReplies(request));
         try {
-            return call.apply(sent);
+            ChatResponse response = call.apply(sent);
+            calibrate(sent, response);
+            return response;
         } catch (RuntimeException e) {
             Matcher m = TOO_BIG.matcher(String.valueOf(e.getMessage()));
             if (!m.find()) throw e;
@@ -162,6 +164,26 @@ final class ContextFittingChatModel implements ChatModel {
             charsPerToken = Math.max(1.0, Math.min(charsPerToken, (double) chars / serverTokens * 0.9));
             return call.apply(fit(request));
         }
+    }
+
+    /** The most characters per token the estimate may assume (English prose is about 4, source code about 3). */
+    static final double MAX_CHARS_PER_TOKEN = 4.0;
+
+    /**
+     * Learns the real characters per token from the prompt size the server reports for a request that worked, in both
+     * directions (an error only ever lowered it): the start value of 3.0 is cautious for prose, and the cut in
+     * {@link #fit} then happens, and costs the server its cache, earlier than the context requires. The same 10% margin as
+     * after an error covers the chat template; if the estimate is still too high, the error path lowers it again.
+     */
+    private void calibrate(ChatRequest sent, ChatResponse response) {
+        var usage = response.tokenUsage();
+        if (usage == null || usage.inputTokenCount() == null || usage.inputTokenCount() <= 0) return;
+        double observed = (double) characters(sent) / usage.inputTokenCount() * 0.9;
+        charsPerToken = Math.max(1.0, Math.min(MAX_CHARS_PER_TOKEN, observed));
+    }
+
+    double charsPerToken() {
+        return charsPerToken;
     }
 
     /** The request with messages shortened so that its estimated size fits the context. */
