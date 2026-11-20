@@ -939,9 +939,9 @@ public class ChatWindow extends Application {
                 box.maxWidthProperty().bind(scroll.widthProperty().multiply(0.75));
                 messages.getChildren().add(box); // at the bottom; the height listener scrolls to it
             }
-            // Thinking can get long: show its latest part, the way a terminal shows the last lines
-            // One line: that it thinks, not what (the words go to the transcript only when the reply is finished)
-            thinkingLabel.setText(thought.isEmpty() ? "" : "Thinking… " + String.format("%,d", thought.length()) + " characters");
+            // Thinking can get long: show a window over its end, the newest whole sentences that fit (ThoughtWindow); the whole
+            // text goes to the transcript when the reply is finished
+            thinkingLabel.setText(ThoughtWindow.latest(thought));
             textLabel.setText(said);
             callsLabel.setText(calls);
             box.getChildren().setAll(List.of(thinkingLabel, textLabel, callsLabel).stream()

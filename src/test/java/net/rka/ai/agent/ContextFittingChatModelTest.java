@@ -112,6 +112,41 @@ class ContextFittingChatModelTest {
         assertEquals(ContextFittingChatModel.EMPTY_REPLY, new ContextFittingChatModel(dead, 16_384).chat(request).aiMessage().text());
     }
 
+    /** A model that thinks first: with a small limit it ends in the middle of its thinking and has said nothing. */
+    private static ChatModel thinksFirst(List<Integer> limits, int neededTokens) {
+        return new ChatModel() {
+            @Override
+            public ChatResponse chat(ChatRequest request) {
+                limits.add(request.maxOutputTokens());
+                boolean enough = request.maxOutputTokens() >= neededTokens;
+                return ChatResponse.builder().aiMessage(AiMessage.from(enough ? "fine" : ""))
+                        .finishReason(enough ? dev.langchain4j.model.output.FinishReason.STOP : dev.langchain4j.model.output.FinishReason.LENGTH).build();
+            }
+        };
+    }
+
+    @Test
+    void anAnswerCutOffBeforeItSaidAnythingIsAskedOnceWithABiggerLimitNotTheSameRequestAgain() {
+        List<Integer> limits = new ArrayList<>();
+        ChatRequest request = ChatRequest.builder().messages(UserMessage.from("what can you do?")).maxOutputTokens(300).build();
+
+        ChatResponse response = new ContextFittingChatModel(thinksFirst(limits, 1_000), 16_384).chat(request);
+
+        assertEquals("fine", response.aiMessage().text());
+        assertEquals(List.of(300, 1_200), limits);
+    }
+
+    @Test
+    void anAnswerThatIsCutOffAgainIsSaidSoAfterOneBiggerTry() {
+        List<Integer> limits = new ArrayList<>();
+        ChatRequest request = ChatRequest.builder().messages(UserMessage.from("what can you do?")).maxOutputTokens(300).build();
+
+        ChatResponse response = new ContextFittingChatModel(thinksFirst(limits, 1_000_000), 16_384).chat(request);
+
+        assertEquals(List.of(300, 1_200), limits, "two requests, not three of the same");
+        assertTrue(response.aiMessage().text().contains("used all 1200 tokens"), response.aiMessage().text());
+    }
+
     @Test
     void smallRequestsPassUnchanged() {
         FakeServer server = new FakeServer(1_000_000, 3);

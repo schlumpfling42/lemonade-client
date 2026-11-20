@@ -459,7 +459,8 @@ one running / done / failed badge); click it to open the right-hand panel, which
 pill's calls with the latest selected and shows the selected call's arguments and full output.
 Everything appears in real time. While the model writes a reply, its thinking (for reasoning
 models), its words and the tool calls it is writing ("⚙ writeFile  writing… 1,240 characters") grow
-in a box at the bottom; the finished reply then replaces it with the normal bubble, dashed
+in a box at the bottom (the thinking as a sliding window over its end: the newest whole sentences that fit about five lines, with a leading
+"…" when earlier thinking has scrolled out, `ThoughtWindow`); the finished reply then replaces it with the normal bubble, dashed
 "Thinking" note and tool chips. While a command runs, its chip shows the latest output line
 ("running · Compiling…") and the side panel shows the whole output as it comes. The CLI streams the
 same to the console. Replies stream token by token (`MODEL_STREAMING=true`, the default); set it to

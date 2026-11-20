@@ -97,9 +97,28 @@ final class ContextFittingChatModel implements ChatModel {
      */
     private static ChatResponse answered(ChatRequest request, Function<ChatRequest, ChatResponse> call) {
         ChatResponse response = null;
+        boolean raised = false;
         for (int i = 0; i < EMPTY_REPLY_TRIES; i++) {
-            response = withoutCutOffCalls(call.apply(request));
-            if (!isEmpty(response.aiMessage())) return response;
+            ChatResponse raw = call.apply(request);
+            boolean cutOff = raw.finishReason() == dev.langchain4j.model.output.FinishReason.LENGTH;
+            boolean halfCall = cutOff && raw.aiMessage() != null && raw.aiMessage().hasToolExecutionRequests();
+            response = withoutCutOffCalls(raw);
+            if (!isEmpty(response.aiMessage()) && !halfCall) return response;
+            if (cutOff) {
+                // The limit on the answer ran out before the model had said anything usable (a reasoning model thinks first): the same
+                // request would end the same way. Once more with a bigger limit; if that is no better, or there is no room, it is said so.
+                Integer limit = request.maxOutputTokens();
+                int bigger = limit == null ? 0 : Math.min(limit * 4, Math.max(limit, Agent.maxOutputTokens()));
+                if (!raised && limit != null && bigger > limit) {
+                    request = request.toBuilder().maxOutputTokens(bigger).build();
+                    raised = true;
+                    continue;
+                }
+                if (!isEmpty(response.aiMessage())) return response; // the text it had written, without its half call
+                return ChatResponse.builder().aiMessage(AiMessage.from("The model used all " + (limit == null ? "its" : request.maxOutputTokens())
+                        + " tokens of its answer before it said anything (it was still thinking). Ask again, or rephrase."))
+                        .modelName(response.modelName()).build();
+            }
         }
         return ChatResponse.builder().aiMessage(AiMessage.from(EMPTY_REPLY)).modelName(response.modelName()).build();
     }
