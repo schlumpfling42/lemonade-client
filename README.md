@@ -499,6 +499,22 @@ changed while the plan waited. Any step of the graph that gives the same result 
 unchanged) stops the run with a message that says which step went round in circles (`LoopWatch`, kept in the graph state; the plain
 agent's tool loop ends by itself after twelve rounds and is not counted). The CLI doesn't save conversations.
 
+## Another configuration (profiles), and GAIA
+
+A profile is a second configuration for the same app. `CHAT_PROFILE=<name>` (a real environment variable, or a line in `.env`) reads the file
+`.env.<name>` on top of `.env`; its values win. With no profile nothing changes. The profile **gaia** uses the Lemonade server that GAIA
+runs for itself: `.env.gaia` names the model (`Qwen3.6-35B-A3B-GGUF`) and the context the app uses (65,536 of the 180,224 that GAIA loads), and
+the address and API key are read from `~/.gaia/lemonade/state.json` when the app starts (GAIA picks a new port and key every time it starts,
+so they are not written down). GAIA must be running; if it is not, the app says so and stops.
+
+```fish
+./gradlew runGaia                          # the chat window on GAIA
+./gradlew runCliGaia --args="question"     # one question on GAIA
+```
+
+In VS Code the launch entry **Launcher (GAIA)** does the same. For another server, copy `.env.gaia` to `.env.<name>`, set
+`LEMONADE_BASE_URL`, `LEMONADE_API_KEY` and `LEMONADE_MODEL` in it and start with `CHAT_PROFILE=<name>`.
+
 ## The model's traffic
 
 The button **⇄ Model traffic** in the header opens a sidebar on the right of the chat (it adds its width to the window, and the window and the

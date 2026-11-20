@@ -3,6 +3,19 @@
     "configurations": [
         {
             "type": "java",
+            "name": "Launcher (GAIA)",
+            "request": "launch",
+            "mainClass": "net.rka.ai.Launcher",
+            "env": { "CHAT_PROFILE": "gaia" },
+            "preLaunchTask": "gradle classes",
+            "classPaths": [
+                "${workspaceFolder}/build/classes/java/main",
+                "${workspaceFolder}/build/resources/main",
+                "$Auto"
+            ]
+        },
+        {
+            "type": "java",
             "name": "Launcher",
             "request": "launch",
             "mainClass": "net.rka.ai.Launcher",

@@ -107,6 +107,28 @@ tasks.register('runCli', JavaExec) {
     standardInput = System.in // for approving terminal/SSH commands
 }
 
+// `./gradlew runGaia` opens the chat window on the Lemonade server that GAIA runs (profile gaia: .env.gaia, address and key from ~/.gaia)
+tasks.register('runGaia', JavaExec) {
+    group = 'application'
+    description = 'Runs the chat window with the profile gaia.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'net.rka.ai.Launcher'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    jvmArgs '--enable-native-access=ALL-UNNAMED'
+    environment 'CHAT_PROFILE', 'gaia'
+}
+
+// `./gradlew runCliGaia --args="question"` asks one question on the GAIA server
+tasks.register('runCliGaia', JavaExec) {
+    group = 'application'
+    description = 'Runs the command-line agent with the profile gaia.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'net.rka.ai.cli.Main'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    standardInput = System.in
+    environment 'CHAT_PROFILE', 'gaia'
+}
+
 // `./gradlew runEval --args="--only add-method"` runs the evaluation cases in evals/cases against the real agent and model (see README)
 tasks.register('runEval', JavaExec) {
     group = 'verification'
