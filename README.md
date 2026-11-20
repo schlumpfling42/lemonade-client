@@ -512,7 +512,7 @@ so they are not written down). GAIA must be running; if it is not, the app says 
 ./gradlew runCliGaia --args="question"     # one question on GAIA
 ```
 
-In VS Code the launch entry **Launcher (GAIA)** does the same. For another server, copy `.env.gaia` to `.env.<name>`, set
+In VS Code the launch entries **Chat (Lemonade)** and **Chat (GAIA)** (and **CLI (Lemonade)** / **CLI (GAIA)**) start the app on one server or the other; run one at a time, as both keep their window state and conversations in `~/chat`. For another server, copy `.env.gaia` to `.env.<name>`, set
 `LEMONADE_BASE_URL`, `LEMONADE_API_KEY` and `LEMONADE_MODEL` in it and start with `CHAT_PROFILE=<name>`.
 
 ## The model's traffic

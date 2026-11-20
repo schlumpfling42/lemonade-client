@@ -92,7 +92,7 @@ tasks.named('test') {
 
 application {
     // `./gradlew run` opens the JavaFX chat window
-    mainClass = 'net.rka.ai.ui.Launcher'
+    mainClass = 'net.rka.ai.Launcher'
     // JavaFX loads native libraries; allow it without a startup warning
     applicationDefaultJvmArgs = ['--enable-native-access=ALL-UNNAMED']
 }

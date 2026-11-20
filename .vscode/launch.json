@@ -1,11 +1,28 @@
 {
+    // Two configurations of the same app: the Lemonade server in .env, and the one GAIA runs (profile gaia, see README). Run one at a time: both keep their window state and conversations in ~/chat.
+    // The launch configurations run the classes that the task "gradle classes" builds (tasks.json), because the editor's own compiler
+    // does not run the annotation processor that writes the *Definition classes.
     "version": "0.2.0",
     "configurations": [
         {
             "type": "java",
-            "name": "Launcher (GAIA)",
+            "name": "Chat (Lemonade)",
             "request": "launch",
             "mainClass": "net.rka.ai.Launcher",
+            "vmArgs": "--enable-native-access=ALL-UNNAMED",
+            "preLaunchTask": "gradle classes",
+            "classPaths": [
+                "${workspaceFolder}/build/classes/java/main",
+                "${workspaceFolder}/build/resources/main",
+                "$Auto"
+            ]
+        },
+        {
+            "type": "java",
+            "name": "Chat (GAIA)",
+            "request": "launch",
+            "mainClass": "net.rka.ai.Launcher",
+            "vmArgs": "--enable-native-access=ALL-UNNAMED",
             "env": { "CHAT_PROFILE": "gaia" },
             "preLaunchTask": "gradle classes",
             "classPaths": [
@@ -16,9 +33,24 @@
         },
         {
             "type": "java",
-            "name": "Launcher",
+            "name": "CLI (Lemonade)",
             "request": "launch",
-            "mainClass": "net.rka.ai.Launcher",
+            "mainClass": "net.rka.ai.cli.Main",
+            "args": "${input:question}",
+            "preLaunchTask": "gradle classes",
+            "classPaths": [
+                "${workspaceFolder}/build/classes/java/main",
+                "${workspaceFolder}/build/resources/main",
+                "$Auto"
+            ]
+        },
+        {
+            "type": "java",
+            "name": "CLI (GAIA)",
+            "request": "launch",
+            "mainClass": "net.rka.ai.cli.Main",
+            "args": "${input:question}",
+            "env": { "CHAT_PROFILE": "gaia" },
             "preLaunchTask": "gradle classes",
             "classPaths": [
                 "${workspaceFolder}/build/classes/java/main",
@@ -31,46 +63,6 @@
             "name": "JavaRoundTrip",
             "request": "launch",
             "mainClass": "net.rka.ai.tools.code.java.JavaRoundTrip"
-        },
-        {
-            "type": "java",
-            "name": "Launcher",
-            "request": "launch",
-            "mainClass": "net.rka.ai.Launcher",
-            "preLaunchTask": "gradle classes",
-            "classPaths": [
-                "${workspaceFolder}/build/classes/java/main",
-                "${workspaceFolder}/build/resources/main",
-                "$Auto"
-            ]
-        },
-        {
-            "type": "java",
-            "name": "Chat UI (JavaFX)",
-            "request": "launch",
-            "mainClass": "net.rka.ai.ui.Launcher",
-            "vmArgs": "--enable-native-access=ALL-UNNAMED",
-            "envFile": "${workspaceFolder}/.env",
-            "preLaunchTask": "gradle classes",
-            "classPaths": [
-                "${workspaceFolder}/build/classes/java/main",
-                "${workspaceFolder}/build/resources/main",
-                "$Auto"
-            ]
-        },
-        {
-            "type": "java",
-            "name": "CLI",
-            "request": "launch",
-            "mainClass": "net.rka.ai.cli.Main",
-            "args": "${input:question}",
-            "envFile": "${workspaceFolder}/.env",
-            "preLaunchTask": "gradle classes",
-            "classPaths": [
-                "${workspaceFolder}/build/classes/java/main",
-                "${workspaceFolder}/build/resources/main",
-                "$Auto"
-            ]
         }
     ],
     "inputs": [
