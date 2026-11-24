@@ -16,6 +16,16 @@ class CommandRunnerTest {
     Path dir;
 
     @Test
+    void doubleQuotesAndSpacesInACommandArriveAsTheyWereWritten() throws Exception {
+        // Select-String -Pattern "a b" used to reach the shell as the two words a and b ("A positional parameter cannot be found ...")
+        String command = CommandRunner.isWindows()
+                ? "Write-Output (\"Not implemented yet\" | Select-String -Pattern \"Not implemented yet\").Matches.Count"
+                : "echo \"Not implemented yet\" | grep -c \"Not implemented yet\"";
+        String result = CommandRunner.run(CommandRunner.shell(command), dir, Duration.ofSeconds(60), chunk -> { });
+        assertTrue(result.startsWith("exit code: 0") && result.contains("1"), result);
+    }
+
+    @Test
     void outputIsPassedOnWhileTheCommandRuns() throws Exception {
         // Prints "first", waits, prints "second": the first line must arrive before the command ends
         String command = CommandRunner.isWindows()

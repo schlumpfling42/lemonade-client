@@ -16,17 +16,31 @@ final class Sampling {
     private Sampling() {
     }
 
-    static double temperature() {
-        return Double.parseDouble(Env.get("MODEL_TEMPERATURE", "0.6"));
+    /** Write this as a setting to send no value: the server then uses its own (Inkling's recommended ones, for instance). */
+    static final String SERVER = "server";
+
+    /** The value of a setting, or null for {@value #SERVER}. */
+    private static String setting(String name, String defaultValue) {
+        String value = Env.get(name, defaultValue).strip();
+        return value.equalsIgnoreCase(SERVER) || value.equalsIgnoreCase("off") ? null : value;
     }
 
-    static double topP() {
-        return Double.parseDouble(Env.get("MODEL_TOP_P", "0.95"));
+    /** Null: the server's own. */
+    static Double temperature() {
+        String value = setting("MODEL_TEMPERATURE", "0.6");
+        return value == null ? null : Double.valueOf(value);
     }
 
-    /** 0 or less: the server's own. */
+    /** Null: the server's own. */
+    static Double topP() {
+        String value = setting("MODEL_TOP_P", "0.95");
+        return value == null ? null : Double.valueOf(value);
+    }
+
+    /** 0 or less (or {@value #SERVER}): the server's own. */
     static int topK() {
-        return Integer.parseInt(Env.get("MODEL_TOP_K", "20"));
+        String value = setting("MODEL_TOP_K", "20");
+        return value == null ? 0 : Integer.parseInt(value);
     }
 
     /** The extra fields of a request with {@code top_k} added (when it is set). */

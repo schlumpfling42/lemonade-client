@@ -59,10 +59,17 @@ final class CommandRunner {
 
     /** The command line wrapped in the platform's shell. */
     static List<String> shell(String command) {
-        // The whole command is ONE argument to the shell, so pipes, quotes etc. are interpreted by the shell
+        // The whole command is ONE argument to the shell, so pipes, quotes etc. are interpreted by the shell.
+        // On Windows it goes as -EncodedCommand (Base64 of UTF-16LE): Java escapes a double quote in an argument as \"
+        // and powershell.exe -Command does not undo that, so Select-String -Pattern "a b" arrived as the two words a and b.
         return isWindows()
-                ? List.of("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command)
+                ? List.of("powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded(command))
                 : List.of("/bin/bash", "-c", command);
+    }
+
+    /** The command as PowerShell's {@code -EncodedCommand} wants it. */
+    static String encoded(String command) {
+        return java.util.Base64.getEncoder().encodeToString(command.getBytes(java.nio.charset.StandardCharsets.UTF_16LE));
     }
 
     /**

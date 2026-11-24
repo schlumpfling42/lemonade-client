@@ -20,7 +20,7 @@ import java.util.Optional;
 final class Analyzer {
 
     /** Tokens for the answer: a function call is a few lines, but a reasoning model thinks first and the thinking counts (an answer cut off before it said anything is asked once more with four times as much, see ContextFittingChatModel). */
-    static final int ANSWER_TOKENS = 1_000;
+    static final int ANSWER_TOKENS = 2_000;
 
     private final ChatModel model;
 
