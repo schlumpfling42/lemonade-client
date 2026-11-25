@@ -567,7 +567,10 @@ public final class CodingGraph {
                 }
                 PlanValidator.Result result = PlanValidator.validate(plan, state.workFolder());
                 if (!result.valid()) {
-                    problem = String.join(" ", result.errors());
+                    // The refused plan goes back with the problems: without it the model has to write 12 changes again from nothing
+                    // (a minutes-long call), and it gave up with an empty plan instead of fixing the one change that was refused.
+                    problem = String.join(" ", result.errors()) + "\nThe plan you submitted, of which only the changes named above are wrong"
+                            + " (keep the others as they are):\n" + lastAnswer;
                     AgentLog.current().line("✗ plan refused (attempt " + attempt + " of " + limits.planAttempts() + ", " + plan.changes().size()
                             + " changes): " + AgentLog.oneLine(problem, 300));
                     continue;

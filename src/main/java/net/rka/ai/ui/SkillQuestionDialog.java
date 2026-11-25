@@ -1,9 +1,12 @@
 package net.rka.ai.ui;
 
 import javafx.geometry.Insets;
+import javafx.geometry.Pos;
 import javafx.scene.control.Alert;
+import javafx.scene.control.Button;
 import javafx.scene.control.ButtonBar;
 import javafx.scene.control.ButtonType;
+import javafx.scene.layout.Region;
 import javafx.scene.control.Label;
 import javafx.scene.control.ScrollPane;
 import javafx.scene.control.TextField;
@@ -13,10 +16,6 @@ import jfx.incubator.scene.control.richtext.RichTextArea;
 import net.rka.ai.agent.skills.SkillAnswer;
 import net.rka.ai.agent.skills.SkillQuestion;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
 
 /**
  * Asks the user a skill's question: the question as Markdown, one button per choice and a comment field.
@@ -53,21 +52,30 @@ final class SkillQuestionDialog {
         comment.setPromptText("Optional");
         comment.setOnAction(e -> e.consume()); // Enter in the field must not press a button
 
-        // One button per choice; YES is not a default button type, so none is pressed by Enter
-        Map<ButtonType, String> byButton = new HashMap<>();
-        List<ButtonType> buttons = new ArrayList<>();
+        // One button per choice, one under the other across the whole width of the dialog, with the text wrapped: choices are whole
+        // sentences, and in the dialog's button bar only the first few letters of each fitted. None is the default button, so
+        // Enter never picks an answer by accident; the bar keeps only Cancel.
+        String[] chosen = new String[1];
+        VBox choices = new VBox(6);
+        Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
         for (String choice : question.choices()) {
-            ButtonType button = new ButtonType(choice, ButtonBar.ButtonData.YES);
-            byButton.put(button, choice);
-            buttons.add(button);
+            Button button = new Button(choice);
+            button.setWrapText(true);
+            button.setMaxWidth(Double.MAX_VALUE);
+            button.setMinHeight(Region.USE_PREF_SIZE);
+            button.setAlignment(Pos.CENTER_LEFT);
+            button.setDefaultButton(false);
+            button.setOnAction(e -> {
+                chosen[0] = choice;
+                alert.close();
+            });
+            choices.getChildren().add(button);
         }
-        buttons.add(CANCEL);
 
-        VBox content = new VBox(8, scroll, caption, comment);
+        VBox content = new VBox(8, scroll, choices, caption, comment);
         content.setPadding(new Insets(4, 0, 0, 0));
 
-        Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
-        alert.getDialogPane().getButtonTypes().setAll(buttons);
+        alert.getDialogPane().getButtonTypes().setAll(CANCEL);
         alert.initOwner(owner);
         alert.setTitle("Question");
         alert.setHeaderText(question.skill());
@@ -77,8 +85,8 @@ final class SkillQuestionDialog {
             alert.getDialogPane().getStylesheets().addAll(owner.getScene().getStylesheets());
         }
 
-        ButtonType pressed = alert.showAndWait().orElse(CANCEL); // closing the window = Cancel
-        String choice = byButton.get(pressed);
+        alert.showAndWait(); // closing the window, or Cancel, leaves no choice
+        String choice = chosen[0];
         return choice == null ? SkillAnswer.dismissed() : new SkillAnswer(choice, comment.getText().strip());
     }
 }
