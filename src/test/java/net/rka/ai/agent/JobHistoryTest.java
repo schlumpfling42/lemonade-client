@@ -21,10 +21,11 @@ class JobHistoryTest {
     }
 
     @Test
-    void theUsersAndTheAssistantsMessagesAreInTheirRolesAndAToolExchangeIsFoldedIntoTheAssistantsMessage() {
+    void theUsersAndTheAssistantsMessagesAreInTheirRolesAndToolExchangesAreLeftOut() {
         ToolExecutionRequest earlier = call("c1", "startCodingJob", "{\"goal\":\"set up the project\"}");
         List<ChatMessage> conversation = List.of(SystemMessage.from("system"), UserMessage.from("finish setting up the test java project"),
                 AiMessage.from(List.of(earlier)), ToolExecutionResultMessage.from(earlier, "Error: the app was closed before this call finished."),
+                AiMessage.from("The job was lost when the app closed."),
                 UserMessage.from("continue"),
                 AiMessage.from(List.of(call("c2", "startCodingJob", "{\"goal\":\"finish\"}")))); // this job: open
 
@@ -32,8 +33,19 @@ class JobHistoryTest {
 
         assertEquals(3, history.size(), history.toString());
         assertEquals(UserMessage.from("finish setting up the test java project"), history.get(0));
-        assertTrue(((AiMessage) history.get(1)).text().contains("startCodingJob") && ((AiMessage) history.get(1)).text().contains("the app was closed"));
+        // no "[call -> result]" in the assistant's text: a model copies that form instead of calling its function
+        assertEquals(AiMessage.from("The job was lost when the app closed."), history.get(1));
         assertEquals(UserMessage.from("continue"), history.get(2));
+    }
+
+    @Test
+    void twoUserMessagesInARowBecomeOne() {
+        ToolExecutionRequest read = call("c1", "readFile", "{\"path\":\"A.java\"}");
+        List<ChatMessage> history = JobHistory.of(List.of(UserMessage.from("look at A"), AiMessage.from(List.of(read)),
+                ToolExecutionResultMessage.from(read, "class A {}"), UserMessage.from("and fix it")));
+
+        assertEquals(1, history.size(), history.toString());
+        assertEquals("look at A\n\nand fix it", ((UserMessage) history.get(0)).singleText());
     }
 
     @Test
@@ -53,12 +65,9 @@ class JobHistoryTest {
     }
 
     @Test
-    void aLongResultAndALongMessageAreClipped() {
-        ToolExecutionRequest read = call("c1", "readFile", "{\"path\":\"A.java\"}");
-        List<ChatMessage> history = JobHistory.of(List.of(UserMessage.from("look"), AiMessage.from(List.of(read)),
-                ToolExecutionResultMessage.from(read, "z".repeat(5_000)), UserMessage.from("w".repeat(5_000))));
+    void aLongMessageIsClipped() {
+        List<ChatMessage> history = JobHistory.of(List.of(UserMessage.from("w".repeat(5_000))));
 
-        assertTrue(((AiMessage) history.get(1)).text().length() < 1_000);
-        assertTrue(((UserMessage) history.get(2)).singleText().length() < 1_600);
+        assertTrue(((UserMessage) history.get(0)).singleText().length() < 1_600);
     }
 }

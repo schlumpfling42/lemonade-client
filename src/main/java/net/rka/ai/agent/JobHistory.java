@@ -17,9 +17,9 @@ import java.util.Map;
  * job had done, or that it had failed ("continue" after a lost job started everything again, and re-read a folder the conversation had
  * already seen).
  * <p>
- * The tool exchanges of the conversation are folded into the assistant's message that made them ({@code [readFile {...} -> text]}),
- * clipped, so the history is valid whatever tools the job is offered. The call that starts this job is left out (it is the job). The
- * newest messages are kept when the budget is not enough.
+ * The tool exchanges of the conversation are left out (the history is then valid whatever tools the job is offered, and the job's model
+ * has no tool-call text to copy, see {@link #assistantText}); the assistant's own words about them stay. The newest messages are kept
+ * when the budget is not enough.
  */
 public final class JobHistory {
 
@@ -40,17 +40,19 @@ public final class JobHistory {
      * @return the user's and the assistant's messages, oldest first, starting with a user message; empty when there are none
      */
     public static List<ChatMessage> of(List<ChatMessage> conversation) {
-        Map<String, String> results = new HashMap<>();
-        for (ChatMessage message : conversation) {
-            if (message instanceof ToolExecutionResultMessage result) results.put(result.id(), result.text());
-        }
         List<ChatMessage> messages = new ArrayList<>();
         for (ChatMessage message : conversation) {
             if (message instanceof UserMessage user) {
                 String text = user.hasSingleText() ? user.singleText() : user.toString();
-                if (!text.isBlank()) messages.add(UserMessage.from(clip(text, MAX_MESSAGE)));
+                if (text.isBlank()) continue;
+                // Two user messages in a row (the assistant between them only used tools) become one
+                if (!messages.isEmpty() && messages.getLast() instanceof UserMessage before) {
+                    messages.set(messages.size() - 1, UserMessage.from(clip(before.singleText() + "\n\n" + text, MAX_MESSAGE)));
+                } else {
+                    messages.add(UserMessage.from(clip(text, MAX_MESSAGE)));
+                }
             } else if (message instanceof AiMessage ai) {
-                String text = assistantText(ai, results);
+                String text = assistantText(ai);
                 if (!text.isBlank()) messages.add(AiMessage.from(clip(text, MAX_MESSAGE)));
             }
         }
@@ -67,16 +69,13 @@ public final class JobHistory {
         return kept;
     }
 
-    private static String assistantText(AiMessage ai, Map<String, String> results) {
-        StringBuilder text = new StringBuilder(ai.text() == null ? "" : ai.text().strip());
-        for (ToolExecutionRequest call : ai.toolExecutionRequests()) {
-            String result = results.get(call.id());
-            if (result == null) continue; // no result: the call that starts this job (or one that never ran)
-            if (!text.isEmpty()) text.append('\n');
-            text.append('[').append(call.name()).append(' ').append(clip(oneLine(call.arguments()), MAX_ARGUMENTS))
-                    .append(" -> ").append(clip(oneLine(result), MAX_RESULT)).append(']');
-        }
-        return text.toString();
+    /**
+     * What the assistant said, without its tool calls. They were once folded into the text as {@code [readSection {...} -> result]}, and
+     * the planner then answered in that form instead of calling its function: it wrote "[submit_plan {...} -> Read results: ..." and made
+     * up results for 3,500 tokens. What a job needs of earlier work is what the assistant said about it.
+     */
+    private static String assistantText(AiMessage ai) {
+        return ai.text() == null ? "" : ai.text().strip();
     }
 
     private static int length(ChatMessage message) {

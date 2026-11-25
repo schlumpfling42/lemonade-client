@@ -617,7 +617,7 @@ public final class CodingGraph {
     // ---- planCheck ----
 
     /** The most tokens a plan may take to write (a good plan is a few hundred; at about 11 tokens a second 3,500 are over five minutes). */
-    static final int PLAN_MAX_TOKENS = 3_500;
+    static final int PLAN_MAX_TOKENS = 6_000;
 
     /** Plan checks per answer of the user: after this many the plan goes to the user as it is. */
     static final int MAX_PLAN_CHECKS = 2;

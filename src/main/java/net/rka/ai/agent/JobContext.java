@@ -15,8 +15,9 @@ final class JobContext {
     }
 
     /** The intro that every opening starts with. */
-    static final String INTRO = "You are working on a coding job. The next message says which part of the job to do now. You have no tools:"
-            + " answer with text only, in exactly the form asked for. Be brief: think in a few words and write no explanations.\n\n";
+    static final String INTRO = "You are working on a coding job. The next message says which part of the job to do now. You cannot read or run"
+            + " anything yourself: answer in exactly the form asked for, with text, or by calling the one function the next message names"
+            + " (never write a call out as text). Be brief: think in a few words and write no explanations.\n\n";
 
     /**
      * @param phase the call being made
