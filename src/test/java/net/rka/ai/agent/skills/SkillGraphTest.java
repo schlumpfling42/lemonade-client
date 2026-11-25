@@ -389,6 +389,43 @@ class SkillGraphTest {
     }
 
     @Test
+    void firstAndRestWorkThroughAListOneEntryARoundAndCopyKeepsTheList() throws Exception {
+        SkillFile skill = load("""
+                { "name": "each", "description": "%s",
+                  "start": "one",
+                  "nodes": [
+                    { "id": "one", "kind": "set", "values": { "todo": { "append": "a" } }, "next": "two" },
+                    { "id": "two", "kind": "set", "values": { "todo": { "append": "b" } }, "next": "three" },
+                    { "id": "three", "kind": "set", "values": { "todo": { "append": "c" } }, "next": "keep" },
+                    { "id": "keep", "kind": "set", "values": { "all": { "copy": "todo" }, "seen": "" }, "next": "pick" },
+                    { "id": "pick", "kind": "set", "values": { "current": { "first": "todo" }, "todo": { "rest": "todo" } }, "next": "note" },
+                    { "id": "note", "kind": "set", "values": { "seen": "{{seen}}{{current}}" }, "next": "more" },
+                    { "id": "more", "kind": "branch",
+                      "cases": [ { "when": { "count": "{{todo}}", "atLeast": 1 }, "then": "pick" } ],
+                      "on": { "pick": "pick", "otherwise": "done" } },
+                    { "id": "done", "kind": "finish", "result": "{{seen}} of {{all}}" } ] }
+                """.formatted(DESCRIPTION));
+        State state = start(call("s1", skill.toolName(), "{}"));
+
+        ToolExecutionResultMessage answer = answer(state, "s1");
+        assertFalse(isError(answer), answer.text());
+        assertEquals("abc of [\"a\",\"b\",\"c\"]", answer.text());
+    }
+
+    @Test
+    void firstAndRestNeedAVariablePathNotATemplate() {
+        String json = """
+                { "name": "bad", "description": "%s",
+                  "start": "pick",
+                  "nodes": [
+                    { "id": "pick", "kind": "set", "values": { "current": { "first": "{{todo}}" } }, "next": "done" },
+                    { "id": "done", "kind": "finish", "result": "x" } ] }
+                """.formatted(DESCRIPTION);
+        List<String> errors = new SkillValidator(GenericKinds.all(), toolCalls.tools()).validate(SkillFile.parse(json), false);
+        assertTrue(errors.stream().anyMatch(e -> e.contains("`values.current`") && e.contains("{\"first\"")), errors.toString());
+    }
+
+    @Test
     void maxStepsStopsALoop() throws Exception {
         SkillFile skill = load("""
                 { "name": "spin", "description": "%s",

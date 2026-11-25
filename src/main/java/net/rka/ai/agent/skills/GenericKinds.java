@@ -1014,9 +1014,11 @@ public final class GenericKinds {
                 Object value = entry.getValue();
                 boolean valid = value instanceof String
                         || value instanceof Map<?, ?> op && op.size() == 1
-                        && (op.get("increment") instanceof Integer || op.get("append") instanceof String);
+                        && (op.get("increment") instanceof Integer || op.get("append") instanceof String
+                        || Templates.isPath(op.get("copy")) || Templates.isPath(op.get("first")) || Templates.isPath(op.get("rest")));
                 if (!valid) {
-                    errors.add(where(node) + "`" + at + "` must be a template, {\"increment\": <whole number>} or {\"append\": <template>}.");
+                    errors.add(where(node) + "`" + at + "` must be a template, {\"increment\": <whole number>}, {\"append\": <template>},"
+                            + " {\"copy\": <variable>}, {\"first\": <list variable>} or {\"rest\": <list variable>}.");
                 }
             }
         }
@@ -1044,6 +1046,10 @@ public final class GenericKinds {
                     if (value instanceof String template) reads.addAll(Templates.references(template));
                     else if (value instanceof Map<?, ?> op && op.get("append") instanceof String template) {
                         reads.addAll(Templates.references(template));
+                    } else if (value instanceof Map<?, ?> op) {
+                        for (String name : List.of("copy", "first", "rest")) {
+                            if (op.get(name) instanceof String path) reads.add(path);
+                        }
                     }
                 }
             }
@@ -1067,6 +1073,14 @@ public final class GenericKinds {
                                 : current instanceof String text && text.strip().matches("-?\\d+") ? Long.parseLong(text.strip())
                                 : 0;
                         after.put(name, number + step);
+                    } else if (((Map<?, ?>) value).get("copy") instanceof String path) {
+                        after.put(name, Templates.value(path, before) == null ? "" : Templates.value(path, before));
+                    } else if (((Map<?, ?>) value).get("first") instanceof String path) {
+                        // The first entry of a list, "" for an empty one or none: with {rest} a node works through a list one entry a round
+                        after.put(name, Templates.value(path, before) instanceof List<?> items && !items.isEmpty() ? items.getFirst() : "");
+                    } else if (((Map<?, ?>) value).get("rest") instanceof String path) {
+                        after.put(name, Templates.value(path, before) instanceof List<?> items && !items.isEmpty()
+                                ? new ArrayList<>(items.subList(1, items.size())) : new ArrayList<>());
                     } else {
                         List<Object> list = new ArrayList<>();
                         if (current instanceof List<?> items) list.addAll(items);

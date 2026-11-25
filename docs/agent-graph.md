@@ -90,6 +90,16 @@ flowchart TD
     subgraph coding ["skill-coding (the built-in coding.json; steps in CodingGraph)"]
         coding_start["start<br/><i>find the startCodingJob call</i>"]
         coding_environment["environment<br/><i>goal, fresh job state, cached environment,<br/>the folder's files (project map)</i>"]
+        coding_roadmap["roadmap<br/><i>model (low effort): is the goal big? {milestones: [...]},<br/>empty for a goal that is one change</i>"]
+        coding_big{"big<br/><i>branch: 2 or more steps?</i>"}
+        coding_approveRoadmap{{"approveRoadmap<br/><i>askUser: Do these steps / One job instead</i>"}}
+        coding_roadmapStart["roadmapStart<br/><i>set: todo = the steps, summary empty</i>"]
+        coding_pick["pick, pickTask<br/><i>set: current = first of todo, todo = rest;<br/>task = this one step of the whole goal</i>"]
+        coding_startWork["startWork<br/><i>set: task = the goal (the free route)</i>"]
+        coding_afterWork{"afterWork<br/><i>branch: inside a big job?</i>"}
+        coding_mark["mark<br/><i>set: summary + this step and its build check</i>"]
+        coding_more{"more<br/><i>branch: steps left?</i>"}
+        coding_allDone["allDone<br/><i>finish: every step with its build check</i>"]
         coding_pickFiles["pickFiles<br/><i>model: plan, study or free? which files?<br/>{approach, files: [...]}</i>"]
         coding_gather["gather<br/><i>graph: the outlines of those files</i>"]
         coding_plan["plan<br/><i>model: calls submit_plan (changes by section);<br/>graph: validates it, reads sections it asks for</i>"]
@@ -112,16 +122,31 @@ flowchart TD
         coding_stopped["stopped<br/><i>only if a step failed without a report<br/>or over maxSteps</i>"]
 
         coding_start --> coding_environment
-        coding_environment --> coding_pickFiles
+        coding_environment --> coding_roadmap
+        coding_roadmap --> coding_big
+        coding_big -- "2 or more steps" --> coding_approveRoadmap
+        coding_big -- "otherwise<br/>one job" --> coding_pickFiles
+        coding_approveRoadmap -- "Do these steps" --> coding_roadmapStart
+        coding_approveRoadmap -- "One job instead" --> coding_pickFiles
+        coding_roadmapStart --> coding_pick
+        coding_pick --> coding_work
         coding_pickFiles -- "done<br/>work that can be planned" --> coding_gather
         coding_pickFiles -- "study<br/>needs the existing code understood first" --> coding_study
         coding_study -- "done" --> coding_gather
-        coding_pickFiles -- "free<br/>open-ended work: no plan" --> coding_work
+        coding_pickFiles -- "free<br/>open-ended work: no plan" --> coding_startWork
+        coding_startWork --> coding_work
         coding_work -- "done" --> coding_check
-        coding_check -- "passed / none<br/>(no build command)" --> coding_workDone
+        coding_check -- "passed / none<br/>(no build command)" --> coding_afterWork
         coding_check -- "failing" --> coding_repair
         coding_repair -- "done" --> coding_recheck
-        coding_recheck -- "passed / none / failing" --> coding_workDone
+        coding_recheck -- "passed / none" --> coding_afterWork
+        coding_recheck -- "failing<br/>(stops a big job)" --> coding_workDone
+        coding_afterWork -- "yes: a step of a big job" --> coding_mark
+        coding_afterWork -- "otherwise" --> coding_workDone
+        coding_mark --> coding_more
+        coding_more -- "steps left" --> coding_pick
+        coding_more -- "none left" --> coding_allDone
+        coding_allDone -. "a finish: ends the skill" .-> coding_end
         coding_workDone -. "a finish: ends the skill" .-> coding_end
         coding_pickFiles -- "stopped<br/>model error, no JSON twice" --> coding_report
         coding_gather --> coding_plan
@@ -260,7 +285,12 @@ its result. The nodes are `skill-coding-<id>`; their tracing spans are `skill/co
 | `skill-coding-check` | `coding.check` | `CodingGraph.check` | **Free route**, no model. Checks what the work changed, not the folder: the files the work's writing calls changed (`changedPaths`, from the transcript; none changed = no check). The build command is the one of the nearest project above a changed file (`VerifyDefaults.detectFor`: the wrapper, gradle, mvn, npm, cargo, go, run in that project's folder, at most 3 projects); without a build file the trusted folder is compiled as a small plain Java project only when it holds at most 200 Java files (hidden folders, `build`, `target`, `out`, `node_modules` not counted: a home folder is not one). The commands are the program's, never the model's, so they need no approval. It sets the skill variable `check` to "passed", "failed (…): the end of the output", "failed … but its messages name none of the changed files … so it was left alone" (not repaired: it was broken before, or by something else) or why nothing was checked. Router `afterCheck`: `passed`, `none` (nothing changed or known to build, tool missing, failure elsewhere), `failing` (a failure that names a changed file). |
 | `skill-coding-repair` | `model` | `GenericKinds.Model` | **Free route**, only after a failed check: a generic `model` node with the editing tools of `work` (no `runCommand`), whose prompt has the goal, the first report (`result`) and the build output (`check`); it fixes what the messages point at and its short report replaces `result`. |
 | `skill-coding-recheck` | `coding.check` | `CodingGraph.check` | The same check once more after the repair; whatever it finds goes to `workDone`, so the free route repairs at most once. |
-| `skill-coding-workDone` | `finish` | `GenericKinds.Finish` | Answers the `startCodingJob` call with the model's report from `result` and the build check (`check`), and says the same to the user (`say`): the `agent` node makes no model call after it. |
+| `skill-coding-roadmap` | `model` | `GenericKinds.Model` | The first question of every job, at low effort and without tools or history: is the goal big (several separate things)? Answers `{"milestones": [...]}` (variable `roadmap`): empty for one change, 2 to 8 sentences that each stand alone for a big goal. Its text shows as progress ("Sizing up the job"), not in the chat. |
+| `skill-coding-big` | `branch` | `GenericKinds.Branch` | 2 or more milestones → `approveRoadmap`; otherwise → `pickFiles` (the job as before). |
+| `skill-coding-approveRoadmap` | `askUser` | `GenericKinds.AskUser` | ⏸ Shows the steps and asks: `Do these steps` → `roadmapStart`, `One job instead` → `pickFiles`; closing the dialog cancels the job. |
+| `skill-coding-roadmapStart`, `skill-coding-pick`, `skill-coding-pickTask`, `skill-coding-startWork` | `set` | `GenericKinds.SetValues` | Variables only, no model: `roadmapStart` sets `todo` (`{"copy": "roadmap.milestones"}`), `summary` and `inRoadmap`; `pick` sets `current` (`{"first": "todo"}`) and `todo` (`{"rest": "todo"}`); `pickTask` sets `task` to "one step of a bigger job (the goal): do only this step now: …"; `startWork` (the free route's entry) sets `task` to the goal. `work` and `repair` use `{{task}}`, never `{{goal}}`. |
+| `skill-coding-afterWork`, `skill-coding-mark`, `skill-coding-more`, `skill-coding-allDone` | `branch`, `set`, `branch`, `finish` | `GenericKinds` | After a passing (or unchecked) step: `afterWork` sends a step of a big job to `mark` (adds the step's report and build check to `summary`) and anything else to `workDone`; `more` loops to `pick` while `todo` has entries, then `allDone` answers the call with every step's report. A step whose build still fails after one repair ends at `workDone` with the earlier steps' `summary` in front, so a big job never goes on over a broken build. |
+| `skill-coding-workDone` | `finish` | `GenericKinds.Finish` | Answers the `startCodingJob` call with the model's report from `result` (after the steps of a big job already done, `summary`) and the build check (`check`), and says the same to the user (`say`): the `agent` node makes no model call after it. |
 | `skill-coding-explain` | `coding.explain` | `CodingGraph.explain` | Only after a job that **changed no code** (nothing applied or everything taken back; not when the user denied the plan). A model call (no tools) over the request and the report: why nothing was changed, in plain words, and two or three things the user can do about it, ending with the question of which they want (`codingExplanation`). A model that cannot be reached leaves the explanation out. |
 | `skill-coding-answer` | `coding.answer` | `CodingGraph.answer` | Answers the `startCodingJob` call with the report (and the explanation under "Why nothing was changed, and what the user can do"), told to the agent to pass on shortly and ask what to do; for a job that is over the agent must not carry on changing code. A job that succeeded also adds the text for the user itself (the outcome line and one line per change, `CodingGraph.doneText`): the `agent` node then makes no model call (the last message is an answer already) and the turn ends. Every other end goes to the agent. |
 | `skill-coding-report` | `coding.report` | `CodingGraph.report` | Builds the Markdown report (outcome, the last **approved** plan with made ✓ and failed ✗ changes marked, a denied revision labelled "Revised plan (not approved)", the design review, the last verify output), saves it as the plan file and sets `codingOutcome` (`success`, `failed`, `unchanged`). It routes to `explain` when no code changed and to `answer` otherwise. The old behavior of answering the `startCodingJob` call moved to `answer`. Previously it answered the call with the report plus a note that the job is over (the agent must not carry on changing code), flagged as an error unless the job is "Done: every change is made and verified". A terminal kind: it has no outcome, and the subgraph ends after it. Every `stopped` route ends here with the reason from `codingStopReason`, e.g. "Stopped: no valid plan after 2 attempts: ...". **A job whose changes were not shown to build ends by putting the files back** (`CodingGraph.rollBack`; verify still failing after the last attempt, a repair that could change nothing, or any stop or error after edits without a passing verify): the plan's files are copied back from the baseline made at approval, files a `create` change made are removed, and the report says so ("The files are back as they were before the job (n restored, m created files removed)") and marks no change as made; if the copies are missing or a file can't be written, the report says the files keep the changes. |
@@ -399,7 +429,7 @@ every tool call, unchanged.
 - File tools refuse paths inside `~/chat/skills`: skill files change only through the builder's
   Save.
 
-**The free route** (`pickFiles` → `work` → `check` → [`repair` → `recheck`] → `workDone`) has no plan to approve, but its build is checked by the graph and repaired once; the model works with the tools of a generic `model` node (listed in the table above), and the rules above keep it safe: only listed tools, the trusted folder, and every risky call (a command that is not trusted, web content) asks the user as in the main graph. After a job the agent itself changes no files in the same turn (`NO_CHANGES_AFTER_JOB`).
+**The free route** (`pickFiles` → `startWork` → `work` → `check` → [`repair` → `recheck`] → `afterWork` → `workDone`; for a big goal `roadmap` → `big` → `approveRoadmap` → `roadmapStart` → [`pick` → `pickTask` → `work` → `check` → … → `afterWork` → `mark` → `more`] → `allDone`) has no plan to approve, but its build is checked by the graph and repaired once; the model works with the tools of a generic `model` node (listed in the table above), and the rules above keep it safe: only listed tools, the trusted folder, and every risky call (a command that is not trusted, web content) asks the user as in the main graph. After a job the agent itself changes no files in the same turn (`NO_CHANGES_AFTER_JOB`).
 
 **Inside a planned coding job** (`coding.*` kinds) none of this applies, because **the model has no tools there**: its
 requests carry no tool specification and its answers are text that `CodingGraph` parses (a list of files, the plan

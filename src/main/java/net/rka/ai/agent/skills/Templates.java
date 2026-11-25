@@ -57,6 +57,16 @@ public final class Templates {
         return paths;
     }
 
+    /** A variable path as the {@code set} node's {@code copy}, {@code first} and {@code rest} take it: {@code a.b.c}, no braces. */
+    static boolean isPath(Object value) {
+        return value instanceof String text && text.matches("[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z0-9_]+)*");
+    }
+
+    /** The value (not its text) at a variable path, e.g. the list {@code roadmap.milestones}; {@code null} when it is missing. */
+    static Object value(String path, Map<String, Object> vars) {
+        return lookup(path, vars);
+    }
+
     /** Follows {@code a.b.c} through nested maps; {@code null} as soon as a part is missing or not an object. */
     private static Object lookup(String path, Map<String, Object> vars) {
         Object value = vars;

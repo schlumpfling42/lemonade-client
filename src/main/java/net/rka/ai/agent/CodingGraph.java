@@ -64,7 +64,7 @@ import java.util.stream.Stream;
  * <b>The model never calls a tool inside a job.</b> The graph reads, writes, builds and applies; the model answers
  * single questions with text of a known shape, each one validated here, each loop bounded:
  * <pre>
- *   environment -> pickFiles -> gather -> plan --(read: more code)--> plan
+ *   environment -> roadmap (big goal: steps, each worked on alone) -> pickFiles -> gather -> plan --(read: more code)--> plan
  *                                          |
  *                                    planApproval (the user: approve / revise / deny)
  *                                          |
@@ -860,8 +860,8 @@ public final class CodingGraph {
         // The size the plan may have: a long plan takes minutes to write and is refused above the hard limit, so the model is told
         // up front what to do with work that does not fit (it plans the most important part, and says what is left)
         prompt.append("\nA plan has at most ").append(PlanValidator.MAX_CHANGES).append(" changes (more than ").append(PlanValidator.HARD_MAX_CHANGES)
-                .append(" is refused) and must be written in few words. If the work needs more, plan the most important changes now and name what is left in"
-                        + " \"summary\": the rest is planned after these are made.");
+                .append(" is refused) and must be written in few words. Plan incrementally: only the next part that is small, whole and leaves the project building, never"
+                        + " the whole goal at once (there is little room to write the code). Name what is left in \"summary\": it is planned after this part is made.");
         boolean revising = REVISE.equals(state.codingDecision()) && !state.codingPoints().isBlank();
         previous.ifPresent(plan -> prompt.append(revising ? "\n\nThe previous plan (this is what the user wants changed, not what to write again):\n"
                 : "\n\nThe previous plan:\n").append(plan.toJson()));

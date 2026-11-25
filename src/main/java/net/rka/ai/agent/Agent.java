@@ -997,6 +997,9 @@ public final class Agent implements AutoCloseable {
         if (skillNode.skill().equals("coding")) {
             if (id.equals("study")) return new Progress("Researching the code", 0, 0, "");
             if (id.equals("work")) return new Progress("Working on it", 0, 0, "");
+            if (id.equals("roadmap")) return new Progress("Sizing up the job", 0, 0, "");
+            // the steps of a big job's loop only move variables: no progress of their own
+            if (java.util.Set.of("big", "roadmapStart", "pick", "pickTask", "startWork", "afterWork", "mark", "more").contains(id)) return null;
         }
         // How far the run is against its step limit: "release-notes · draft · step 3/40"
         int max = skills.skill(skillNode.skill()).map(skill -> skill.limits().maxSteps()).orElse(0);

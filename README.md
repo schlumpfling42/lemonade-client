@@ -18,12 +18,13 @@ START -> memory -> analyze -> agent                            memory = summariz
                         --(skill_<name> call)---> skill-<name> -> agent   one subgraph per skill file, see Skills
                         --(no tool calls)-------> END                  (also after 12 tool rounds in one turn)
 
-skill-coding = start -> environment -> pickFiles -> gather -> plan 
+skill-coding = start -> environment -> roadmap (is the goal big?) -> pickFiles -> gather -> plan 
          -> (pause: you approve the plan; a comment goes to revise: a question is answered, a change makes a new plan)
          -> setup -> edit (per file) -> verify (-> fix) -> report
          -> (no code changed: explain why and what to do) -> answer
          (needs the code understood: pickFiles -> study (read-only model) -> gather -> plan ...;
-          open-ended work: pickFiles -> work (a model with tools) -> check (the build, no model) -> [repair -> recheck] -> finish, no plan)
+          open-ended work: pickFiles -> work (a model with tools) -> check (the build, no model) -> [repair -> recheck] -> finish, no plan
+          a big goal: roadmap -> (pause: you approve the steps) -> for each step: work -> check -> [repair -> recheck] -> next step -> finish (every step's report))
 skillBuilder = tools -> draft -> validate -> (pause: you review the draft) -> save -> finish
 skill-<name> = start -> the nodes of the file (model, askUser, branch, set, finish) -> finish
          + toolStep and (pause: you approve guarded tool calls) toolApproval; askUser nodes pause too
@@ -236,7 +237,7 @@ A node has an `id` (letters, digits and `_`, starting with a letter, unique; not
 | `model` | `prompt`\*, `tools`, `output`, `format` (`text` / `json`), `thinking` (`shown` / `progress`), `history` (true: the conversation before the skill goes in front of the prompt as messages, clipped), `maxTokens` (50 to 32000: the longest reply of this step; the built-in research step uses 2500) | `done` | Asks the model with `prompt`. With `tools` (names of tools) it may call them, round after round (`maxToolRounds`), before it answers; the final text goes to the variable `output`. `format: json` parses the answer, so later nodes can use `{{<output>.<field>}}`. `thinking: progress` shows progress instead of the streamed text. The model can't ask you anything here: use `askUser` for that. |
 | `askUser` | `question`\*, `choices`\*, `output` | one per choice | Pauses and shows `question` with a button per choice (the CLI numbers them: `2`, `2 a comment`, `c <comment>` for the first choice with a comment). The answer goes to `output` as `{choice, comment}`. Closing the question, a failing approver or no input ends the skill with an error ("Stopped: cancelled by the user."), always through the automatic stopped finish, even when the node maps `stopped` in `on`. |
 | `branch` | `cases`\* (list of `{when, then}`) | each `then`, and `otherwise` | The first case whose `when` holds gives the outcome; none gives `otherwise`. |
-| `set` | `values`\* (variable → value) | `done` | Each value is a template, `{"increment": 1}` (adds to a number, a missing one counts as 0) or `{"append": "<template>"}` (adds to a list). Values are computed from the variables as they were before the node. |
+| `set` | `values`\* (variable → value) | `done` | Each value is a template, `{"increment": 1}` (adds to a number, a missing one counts as 0), `{"append": "<template>"}` (adds to a list), `{"copy": "var.path"}` (the value itself, e.g. a list the model answered in JSON), `{"first": "list"}` (its first entry, "" for an empty list) or `{"rest": "list"}` (the list without its first entry); with `first`, `rest` and a `branch` on `{"count": ...}` a skill works through a list one entry a round. Values are computed from the variables as they were before the node. |
 | `finish` | `result`\*, `error`, `say` | none | Ends the skill: `result` (a template) is the tool's answer in the conversation; `"error": true` flags it as failed; `say` (a template) is also the reply to the user, so the agent makes no call to word it again. |
 
 Every kind also has the outcome `stopped` (a model or tool error, a closed question, an invalid JSON

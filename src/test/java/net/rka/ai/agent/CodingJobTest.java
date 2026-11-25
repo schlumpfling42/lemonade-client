@@ -63,12 +63,18 @@ class CodingJobTest {
     private static final class ScriptedModel implements ChatModel {
         final Deque<AiMessage> answers = new ArrayDeque<>();
         final List<ChatRequest> requests = new ArrayList<>();
+        /** What the first step of a job answers to "is the goal big?": no steps. */
+        String roadmap = "{\"milestones\": []}";
 
         @Override
         public ChatResponse chat(ChatRequest request) {
             // The intent check after a passing build is answered on the side, so the scripts of the other steps stay as they are
             if (request.messages().toString().contains("checking a finished coding change") || request.messages().toString().contains("checking a plan for a coding job")) {
                 return ChatResponse.builder().aiMessage(AiMessage.from("OK")).build();
+            }
+            // The first step of every job asks whether the goal is big (a list of steps); these tests are about small jobs
+            if (request.messages().toString().contains("Split this goal into steps only when it is big")) {
+                return ChatResponse.builder().aiMessage(AiMessage.from(roadmap)).build();
             }
             requests.add(request);
             AiMessage answer = answers.poll();
@@ -173,6 +179,32 @@ class CodingJobTest {
         ToolRegistry withSkill = tools.withSkills(agent.skillStatus().skills());
         assertEquals(tools.specifications(), withSkill.specifications());
         assertTrue(withSkill.isSkillTool(CodingGraph.START_TOOL)); // routed to skill-coding, never run
+    }
+
+    @Test
+    void aBigGoalIsSplitIntoStepsTheUserApprovesAndEachStepIsWorkedOnInTurnAndReported() throws Exception {
+        model.answers.add(AiMessage.from(START));
+        model.roadmap = "{\"milestones\": [\"Step A: the sidebar\", \"Step B: the shortcuts\"]}";
+        approver.answersToQuestions.add(new net.rka.ai.agent.skills.SkillAnswer("Do these steps", ""));
+        answers("Did A.", "Did B."); // the work of each step: text, no tool calls
+
+        List<ChatMessage> produced = run();
+
+        // The user was asked once, with the steps in the question
+        assertEquals(1, approver.questions.size(), approver.questions.toString());
+        assertTrue(approver.questions.getFirst().question().contains("Step A: the sidebar")
+                && approver.questions.getFirst().question().contains("Step B: the shortcuts"), approver.questions.getFirst().question());
+        // Each step is worked on alone, in order, as part of the whole goal
+        List<String> work = model.requests.stream().map(CodingJobTest::text).filter(t -> t.contains("Do only this step now")).toList();
+        assertEquals(2, work.size(), work.toString());
+        assertTrue(work.get(0).contains("Do only this step now: Step A: the sidebar") && !work.get(0).contains("Step B: the shortcuts"), work.get(0));
+        assertTrue(work.get(1).contains("Do only this step now: Step B: the shortcuts"), work.get(1));
+        // One report of the whole job, with every step in it
+        ToolExecutionResultMessage report = assertInstanceOf(ToolExecutionResultMessage.class, produced.get(1));
+        assertFalse(Boolean.TRUE.equals(report.isError()), report.text());
+        assertTrue(report.text().startsWith("Every step is done"), report.text());
+        assertTrue(report.text().contains("## Step A: the sidebar\nDid A.") && report.text().contains("## Step B: the shortcuts\nDid B."), report.text());
+        assertTrue(model.answers.isEmpty());
     }
 
     @Test
@@ -436,7 +468,7 @@ class CodingJobTest {
                 progress -> phases.add(progress.phase()));
 
         // Each phase once: the job ran every node a single time (the empty folder has no files to find)
-        assertEquals(List.of("Checking tools", "Finding the code", "Finding the code", "Planning", "Setting up", "Change 1/1",
+        assertEquals(List.of("Checking tools", "Sizing up the job", "Finding the code", "Finding the code", "Planning", "Setting up", "Change 1/1",
                 "Verifying (attempt 1/3)", "Writing report"), phases);
     }
 

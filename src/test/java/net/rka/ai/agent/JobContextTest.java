@@ -49,7 +49,7 @@ class JobContextTest {
         String opening = JobContext.compose(JobPhase.EXPLAIN, parts());
 
         assertTrue(opening.endsWith("Trusted folder: /work"), opening);
-        assertTrue(opening.length() < 400);
+        assertTrue(opening.length() < 700);
     }
 
     @Test

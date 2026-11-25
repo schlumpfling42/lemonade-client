@@ -27,11 +27,11 @@ class FreeRouteCheckTest {
         skill.nodes().forEach(n -> nodes.put(n.id(), n));
 
         assertEquals("check", nodes.get("work").next());
-        assertEquals("workDone", nodes.get("check").on().get("passed"));
-        assertEquals("workDone", nodes.get("check").on().get("none"));
+        assertEquals("afterWork", nodes.get("check").on().get("passed")); // on: a big job goes on with its next step, otherwise workDone
+        assertEquals("afterWork", nodes.get("check").on().get("none"));
         assertEquals("repair", nodes.get("check").on().get("failing"));
         assertEquals("recheck", nodes.get("repair").next());
         // the second check never goes back to the repair: one repair at most
-        assertEquals(List.of("workDone"), nodes.get("recheck").on().values().stream().distinct().toList());
+        assertEquals(List.of("afterWork", "workDone"), nodes.get("recheck").on().values().stream().distinct().sorted().toList()); // failing again ends the job
     }
 }

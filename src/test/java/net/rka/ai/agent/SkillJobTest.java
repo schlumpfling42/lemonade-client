@@ -570,7 +570,8 @@ class SkillJobTest {
         // Inside a coding job: no tool at all in any request of the job (the model only writes text there)
         model.requests.clear();
         answers(AiMessage.from(List.of(call("job1", CodingGraph.START_TOOL, "{\"goal\":\"look\"}"))));
-        answers("{\"summary\":\"Note\",\"changes\":[{\"file\":\"note.txt\",\"action\":\"create\",\"intent\":\"a note\"}]}",
+        answers("{\"milestones\": []}", // the job first asks whether the goal is big
+                "{\"summary\":\"Note\",\"changes\":[{\"file\":\"note.txt\",\"action\":\"create\",\"intent\":\"a note\"}]}",
                 "```\nhello\n```", "Nothing was changed because the build could not run.", FINAL);
         approver.plans.add(new PlanDecision(PlanDecision.Kind.APPROVE, ""));
         run("look around");
