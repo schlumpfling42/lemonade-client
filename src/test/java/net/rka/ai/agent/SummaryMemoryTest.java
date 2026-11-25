@@ -160,7 +160,7 @@ class SummaryMemoryTest {
 
         assertEquals(messages.size(), sent.size()); // one message per message: the indices stay the same
         String oldRead = ((ToolExecutionResultMessage) sent.get(3)).text();
-        assertTrue(oldRead.startsWith("A".repeat(SummaryMemory.EARLIER_TURN_CHARS)) && oldRead.length() < 600, oldRead);
+        assertTrue(oldRead.startsWith("A".repeat(ContextGroom.EARLIER_TURN_CHARS)) && oldRead.length() < 600, oldRead);
         assertTrue(oldRead.contains("shown in an earlier turn"), oldRead);
         String oldWrite = ((AiMessage) sent.get(4)).toolExecutionRequests().getFirst().arguments();
         var json = new com.fasterxml.jackson.databind.ObjectMapper().readTree(oldWrite); // still valid JSON

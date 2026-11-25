@@ -771,6 +771,7 @@ public class AgentGraph {
     // summaryTrigger, keeping about summaryRecent of the newest messages verbatim
     private final int summaryTrigger;
     private final int summaryRecent;
+    private final int incrementalThreshold;
     // The loaded skills (one subgraph each; the coding job is the built-in skill "coding"), their kinds,
     // and skill name by the tool that starts it
     private final SkillLoader.Loaded skills;
@@ -780,12 +781,18 @@ public class AgentGraph {
     private final SkillLoader skillLoader;
 
     AgentGraph(ChatModel model, ToolCallRunner toolCalls, NodeTracing tracing) {
-        this(model, toolCalls, tracing, 6000, 2000);
+        this(model, toolCalls, tracing, 6000, 2000, 20);
     }
 
     /** Without skills (so without coding jobs either), and a skill builder that has no folder to save to. */
     AgentGraph(ChatModel model, ToolCallRunner toolCalls, NodeTracing tracing, int summaryTrigger, int summaryRecent) {
-        this(model, toolCalls, tracing, summaryTrigger, summaryRecent, new SkillLoader.Loaded(List.of(), Map.of()),
+        this(model, toolCalls, tracing, summaryTrigger, summaryRecent, 20);
+    }
+
+    AgentGraph(ChatModel model, ToolCallRunner toolCalls, NodeTracing tracing, int summaryTrigger, int summaryRecent,
+               int incrementalThreshold) {
+        this(model, toolCalls, tracing, summaryTrigger, summaryRecent, incrementalThreshold,
+                new SkillLoader.Loaded(List.of(), Map.of()),
                 new SkillLoader(null, List.of(), new SkillValidator(GenericKinds.all(), toolCalls.tools())));
     }
 
@@ -799,13 +806,13 @@ public class AgentGraph {
      *               saves them to its folder
      */
     AgentGraph(ChatModel model, ToolCallRunner toolCalls, NodeTracing tracing, int summaryTrigger, int summaryRecent,
-               SkillLoader.Loaded skills, SkillLoader loader) {
-        this(model, toolCalls, tracing, summaryTrigger, summaryRecent, skills, loader, false);
+               int incrementalThreshold, SkillLoader.Loaded skills, SkillLoader loader) {
+        this(model, toolCalls, tracing, summaryTrigger, summaryRecent, incrementalThreshold, skills, loader, false);
     }
 
     /** @param triage whether every turn starts by asking the model what to do with the message ({@link Analyzer}) */
     AgentGraph(ChatModel model, ToolCallRunner toolCalls, NodeTracing tracing, int summaryTrigger, int summaryRecent,
-               SkillLoader.Loaded skills, SkillLoader loader, boolean triage) {
+               int incrementalThreshold, SkillLoader.Loaded skills, SkillLoader loader, boolean triage) {
         this.analyzer = triage ? new Analyzer(model) : null;
         this.skills = skills;
         this.skillLoader = loader;
@@ -818,6 +825,7 @@ public class AgentGraph {
         this.tracing = tracing;
         this.summaryTrigger = summaryTrigger;
         this.summaryRecent = summaryRecent;
+        this.incrementalThreshold = incrementalThreshold;
     }
 
     /**
@@ -877,14 +885,17 @@ public class AgentGraph {
     Map<String, Object> summarize(State state) {
         ConversationSummary current = state.summary();
         List<ChatMessage> messages = state.messages();
-        // Measured on what is actually sent (earlier turns compacted, see SummaryMemory.compactEarlierTurns), so
-        // a turn that read big files doesn't push the conversation over the limit and force a new summary
-        // (which changes the start of every request and costs the model server its cache) on every turn
-        int cutoff = SummaryMemory.cutoff(SummaryMemory.compactEarlierTurns(messages), current.covered(), summaryTrigger, summaryRecent);
-        if (cutoff <= current.covered()) return Map.of(); // small enough: keep the summary as it is
-        // One extra model call: merge the old summary with the messages that drop out of view
-        String text = SummaryMemory.summarize(model, current.text(), messages.subList(current.covered(), cutoff));
-        if (text.isBlank()) return Map.of(); // the model returned nothing: better to send more than lose context
+        List<ChatMessage> compacted = SummaryMemory.compactEarlierTurns(messages);
+        int cutoff = SummaryMemory.cutoff(compacted, current.covered(), summaryTrigger, summaryRecent);
+        if (cutoff <= current.covered()) return Map.of();
+        // Incremental update when the conversation is small: cheaper than a full summary.
+        if (current.isEmpty() || compacted.size() - current.covered() < incrementalThreshold) {
+            String text = SummaryMemory.incrementalUpdate(model, current.text(), compacted.subList(current.covered(), cutoff));
+            if (text.isBlank()) return Map.of();
+            return Map.of(State.SUMMARY, text, State.SUMMARY_COVERED, cutoff);
+        }
+        String text = SummaryMemory.summarize(model, current.text(), compacted.subList(current.covered(), cutoff));
+        if (text.isBlank()) return Map.of();
         return Map.of(State.SUMMARY, text, State.SUMMARY_COVERED, cutoff);
     }
 
@@ -1049,14 +1060,14 @@ public class AgentGraph {
         String jobs = jobStartedThisTurn(state.messages()) ? "" : JobLedger.note(state.messages());
         if (!jobs.isEmpty()) notes.add(jobs);
         if (!notes.isEmpty()) messages.add(UserMessage.from("Notes from the program (not from the user):\n\n" + String.join("\n\n", notes)));
-        // The tool list is sent on the last round too, although no call will run: the chat template puts the
-        // tools at the very start of the prompt, and a request without them would make the model server
-        // re-read the whole conversation instead of reusing what it has cached (minutes on a long turn).
-        ChatRequest.Builder request = ChatRequest.builder().toolSpecifications(toolCalls.tools().specifications());
+        // Tool specs: skip on the last round (no calls will run) to save tokens; one extra cache miss.
+        ChatRequest.Builder request;
         if (lastRound) {
-            // Only this request needs it, so it isn't stored in the state
             messages.add(UserMessage.from("You have used " + MAX_AGENT_ROUNDS + " rounds of tool calls in this turn."
                     + " Answer now without tool calls: say what is done and what is left."));
+            request = ChatRequest.builder();
+        } else {
+            request = ChatRequest.builder().toolSpecifications(toolCalls.tools().specifications());
         }
         AiMessage reply = model.chat(request.messages(messages).build()).aiMessage(); // blocks until Lemonade answers
         if (!lastRound && announcesWithoutActing(reply)) reply = afterAnnouncement(state, request, messages, reply);

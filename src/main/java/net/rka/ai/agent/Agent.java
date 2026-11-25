@@ -271,7 +271,7 @@ public final class Agent implements AutoCloseable {
         CompiledGraph<AgentGraph.State> graph = new AgentGraph(model,
                 new ToolCallRunner(tracing.tracer(), offered, live, deniedFolders()),
                 new NodeTracing(tracing.tracer(), live),
-                memorySummaryTokens(), memoryRecentTokens(),
+                memorySummaryTokens(), memoryRecentTokens(), memoryIncrementalThreshold(),
                 skills, skillLoader, triage).compile();
         return new Compiled(graph, offered, skills, skills.nodeIndex(), Set.copyOf(AgentGraph.skillPauses(skills, kinds)),
                 skillWork(skills));
@@ -356,6 +356,11 @@ public final class Agent implements AutoCloseable {
     static int memoryRecentTokens() {
         return Integer.parseInt(Env.get("MEMORY_RECENT_TOKENS",
                 String.valueOf(Math.max(2000, contextTokens() / 16))));
+    }
+
+    /** Messages of unsummarized text that trigger incremental summary updates instead of a full summary ({@code MEMORY_INCREMENTAL_THRESHOLD}). Default 20. */
+    static int memoryIncrementalThreshold() {
+        return Integer.parseInt(Env.get("MEMORY_INCREMENTAL_THRESHOLD", "20"));
     }
 
     /**

@@ -645,10 +645,9 @@ class CodingJobTest {
         List<ChatMessage> produced = run();
 
         assertEquals(AgentGraph.MAX_AGENT_ROUNDS + 1, model.requests.size());
-        // The last request asks for an answer; it still lists the tools (the same prompt start as the round
-        // before, so the model server reuses its cache), but any call it makes is dropped
+        // The last request asks for an answer without tool calls (tool specs removed to save tokens)
         ChatRequest last = model.requests.getLast();
-        assertEquals(model.requests.get(model.requests.size() - 2).toolSpecifications(), last.toolSpecifications());
+        assertTrue(last.toolSpecifications() == null || last.toolSpecifications().isEmpty(), "no tool specs on last round");
         assertTrue(text(last).contains("rounds of tool calls"), text(last));
         // Its calls were stripped: the turn ends with an answer and nothing open
         AiMessage answer = assertInstanceOf(AiMessage.class, produced.getLast());

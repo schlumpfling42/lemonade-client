@@ -225,15 +225,81 @@ final class ContextFittingChatModel implements ChatModel {
         return request.toBuilder().messages(messages).build();
     }
 
-    /** Keeps about two thirds from the start and one third from the end, with a marker in between. */
+    /** Keeps about two thirds from the start and one third from the end, with a marker in between.
+     *  If the text is JSON, tries to keep valid JSON by cutting at field boundaries. */
     static String shorten(String text, int keep) {
         if (text.length() <= keep) return text;
+        // Try to keep JSON valid: cut at field boundaries instead of mid-character
+        String jsonShort = shortenJson(text, keep);
+        if (jsonShort != null) return jsonShort;
+        // Fallback: blind cut
         int head = keep * 2 / 3;
         int tail = keep - head;
         return text.substring(0, head)
                 + "\n[… " + (text.length() - keep) + " characters cut to fit the model's context;"
                 + " read a smaller part if you need them …]\n"
                 + text.substring(text.length() - tail);
+    }
+
+    /** Try to shorten JSON text while keeping it valid. Returns null if not JSON or can't be shortened. */
+    private static String shortenJson(String text, int keep) {
+        if (text.isBlank() || (text.charAt(0) != '{' && text.charAt(0) != '[')) return null;
+        try {
+            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            com.fasterxml.jackson.databind.JsonNode node = mapper.readTree(text);
+            if (keep < 50) return null; // too small to be useful
+            // Walk the tree and shorten long string values
+            com.fasterxml.jackson.databind.JsonNode shortened = shortenNode(node, keep, mapper);
+            if (shortened == null) return null;
+            String result = mapper.writeValueAsString(shortened);
+            // If we couldn't shorten enough, return null to fall back to blind cut
+            if (result.length() > keep + MARKER_CHARS) return null;
+            return result;
+        } catch (Exception e) {
+            return null; // not valid JSON
+        }
+    }
+
+    /** Recursively shorten a JSON node, keeping total string length under maxChars. */
+    private static com.fasterxml.jackson.databind.JsonNode shortenNode(
+            com.fasterxml.jackson.databind.JsonNode node, int maxChars,
+            com.fasterxml.jackson.databind.ObjectMapper mapper) {
+        if (node.isTextual()) {
+            String text = node.asText();
+            if (text.length() <= maxChars) return node;
+            int head = maxChars * 2 / 3;
+            int tail = Math.max(maxChars - head, 20);
+            return new com.fasterxml.jackson.databind.node.TextNode(text.substring(0, head)
+                    + "\n[… " + (text.length() - maxChars) + " chars cut …]\n"
+                    + text.substring(Math.max(0, text.length() - tail)));
+        }
+        if (node.isObject()) {
+            com.fasterxml.jackson.databind.node.ObjectNode obj = mapper.createObjectNode();
+            int remaining = maxChars;
+            for (var it = node.fields(); it.hasNext(); ) {
+                var entry = it.next();
+                com.fasterxml.jackson.databind.JsonNode value = shortenNode(entry.getValue(), remaining, mapper);
+                if (value != null) {
+                    obj.set(entry.getKey(), value);
+                    // Rough estimate: field name + colon + value length
+                    remaining -= entry.getKey().length() + 2 + value.toString().length();
+                }
+            }
+            return obj;
+        }
+        if (node.isArray()) {
+            com.fasterxml.jackson.databind.node.ArrayNode arr = mapper.createArrayNode();
+            int remaining = maxChars;
+            for (var elem : node) {
+                com.fasterxml.jackson.databind.JsonNode shortened = shortenNode(elem, remaining, mapper);
+                if (shortened != null) {
+                    arr.add(shortened);
+                    remaining -= shortened.toString().length();
+                }
+            }
+            return arr;
+        }
+        return node; // numbers, booleans, null: keep as-is
     }
 
     private static String text(ChatMessage message) {

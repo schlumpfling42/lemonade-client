@@ -115,7 +115,20 @@ final class SummaryMemory {
             prompt.append("Previous summary:\n").append(previousSummary.strip()).append("\n\n");
         }
         prompt.append("New messages to add to the summary:\n").append(transcript(messages));
-        // A plain request without tools: the model can only answer with text
+        ChatRequest request = ChatRequest.builder()
+                .messages(SystemMessage.from(INSTRUCTIONS), UserMessage.from(prompt.toString()))
+                .build();
+        String summary = model.chat(request).aiMessage().text();
+        return summary == null ? "" : summary.strip();
+    }
+
+    /** Incremental update: merge the previous summary with just the new messages. ~30% of a full summary. */
+    static String incrementalUpdate(ChatModel model, String previousSummary, List<ChatMessage> newMessages) {
+        if (previousSummary.isBlank()) return summarize(model, "", newMessages);
+        StringBuilder prompt = new StringBuilder();
+        prompt.append("Update this summary with the new messages. Keep the existing structure and add only what's new.\n\n");
+        prompt.append("Current summary:\n").append(previousSummary.strip()).append("\n\n");
+        prompt.append("New messages to add:\n").append(transcript(newMessages));
         ChatRequest request = ChatRequest.builder()
                 .messages(SystemMessage.from(INSTRUCTIONS), UserMessage.from(prompt.toString()))
                 .build();
@@ -149,89 +162,10 @@ final class SummaryMemory {
      * What the model is sent: the system prompt (with the summary appended, if any) followed by the
      * messages from {@code covered} on. Messages before {@code covered} are represented by the summary.
      */
-    /** Tool results and call arguments of earlier turns longer than this are shortened when sent again. */
-    static final int EARLIER_TURN_CHARS = 400;
-
-    /**
-     * The messages with every turn before the current one compacted: a tool result longer than
-     * {@link #EARLIER_TURN_CHARS} keeps only its start plus a note that the rest was sent in an earlier
-     * turn, and long string values in tool call arguments (the content of a {@code writeFile}, the new text
-     * of an {@code editSection}) become "[N characters]". The current turn (from the last user message on) is
-     * unchanged, and so are the questions, the answers and the saved conversation.
-     * <p>
-     * Why: old file contents, web pages and written files were sent again, word for word, on every request
-     * of every later turn: one session reached 124,000 characters, of which a few thousand were still
-     * needed. A local model server reads a few hundred tokens a second, so re-reading that took minutes
-     * whenever it couldn't use its cache, and it kept summary memory over its limit, so a new summary
-     * changed the start of the prompt on every turn and the cache was lost again. The model can call the
-     * tool again when it needs an old result in full.
-     * <p>
-     * The result keeps one message per message (same indices, so {@link #cutoff} can work on it), and a
-     * compacted message depends only on itself, so every request of a turn sends the same text and the
-     * server's cache stays valid.
-     */
+    /** Compact tool results and arguments from earlier turns — delegated to {@link ContextGroom}. */
     static List<ChatMessage> compactEarlierTurns(List<ChatMessage> messages) {
-        int currentTurn = -1;
-        for (int i = messages.size() - 1; i >= 0 && currentTurn < 0; i--) {
-            if (messages.get(i) instanceof UserMessage) currentTurn = i;
-        }
-        if (currentTurn <= 0) return messages;
-        List<ChatMessage> compacted = new ArrayList<>(messages.size());
-        for (int i = 0; i < messages.size(); i++) {
-            ChatMessage message = messages.get(i);
-            compacted.add(i < currentTurn ? compact(message) : message);
-        }
-        return compacted;
+        return ContextGroom.compactEarlierTurns(messages);
     }
-
-    private static ChatMessage compact(ChatMessage message) {
-        if (message instanceof ToolExecutionResultMessage result && result.text().length() > EARLIER_TURN_CHARS) {
-            String text = result.text();
-            int keep = EARLIER_TURN_CHARS;
-            return ToolExecutionResultMessage.builder()
-                    .id(result.id())
-                    .toolName(result.toolName())
-                    .text(text.substring(0, keep) + "\n[… " + (text.length() - keep) + " more characters of this "
-                            + result.toolName() + " result were shown in an earlier turn; call the tool again if you"
-                            + " need them]")
-                    .isError(result.isError())
-                    .build();
-        }
-        if (message instanceof AiMessage ai && ai.hasToolExecutionRequests()) {
-            List<ToolExecutionRequest> calls = new ArrayList<>();
-            boolean changed = false;
-            for (ToolExecutionRequest call : ai.toolExecutionRequests()) {
-                String arguments = compactArguments(call.arguments());
-                changed |= !arguments.equals(call.arguments());
-                calls.add(ToolExecutionRequest.builder().id(call.id()).name(call.name()).arguments(arguments).build());
-            }
-            if (!changed) return message;
-            return AiMessage.builder().text(ai.text()).thinking(ai.thinking()).toolExecutionRequests(calls).build();
-        }
-        return message;
-    }
-
-    /** The arguments JSON with every string value longer than {@link #EARLIER_TURN_CHARS} replaced by "[N characters]". */
-    private static String compactArguments(String arguments) {
-        if (arguments == null || arguments.length() <= EARLIER_TURN_CHARS) return arguments;
-        try {
-            com.fasterxml.jackson.databind.JsonNode tree = JSON.readTree(arguments);
-            if (!(tree instanceof com.fasterxml.jackson.databind.node.ObjectNode object)) return arguments;
-            boolean changed = false;
-            for (var field : object.properties()) {
-                if (field.getValue().isTextual() && field.getValue().asText().length() > EARLIER_TURN_CHARS) {
-                    field.setValue(new com.fasterxml.jackson.databind.node.TextNode(
-                            "[" + field.getValue().asText().length() + " characters, sent in an earlier turn]"));
-                    changed = true;
-                }
-            }
-            return changed ? JSON.writeValueAsString(object) : arguments;
-        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
-            return arguments; // not JSON: leave it
-        }
-    }
-
-    private static final com.fasterxml.jackson.databind.ObjectMapper JSON = new com.fasterxml.jackson.databind.ObjectMapper();
 
     static List<ChatMessage> view(List<ChatMessage> messages, ConversationSummary summary) {
         if (summary.isEmpty() || summary.covered() <= 1 || messages.isEmpty()
