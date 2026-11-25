@@ -51,7 +51,9 @@ final class AnalyzeMessage {
         for (ChatMessage message : conversation) {
             if (!(message instanceof SystemMessage)) messages.add(message); // the agent's own system message is for the agent
         }
-        return ChatRequest.builder().messages(messages).toolSpecifications(functions).toolChoice(ToolChoice.REQUIRED)
+        // Low reasoning effort: this call only picks a route, and thinking is most of its time (about 15 tokens a second)
+        return ChatRequest.builder().parameters(Effort.parameters(net.rka.ai.config.Env.get("ANALYZER_REASONING_EFFORT", "low")))
+                .messages(messages).toolSpecifications(functions).toolChoice(ToolChoice.REQUIRED)
                 .maxOutputTokens(Analyzer.ANSWER_TOKENS).temperature(0.0).build();
     }
 

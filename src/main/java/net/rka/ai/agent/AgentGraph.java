@@ -924,6 +924,32 @@ public class AgentGraph {
         throw new IllegalStateException("no @Offers on " + method);
     }
 
+    /** How much of the conversation the analysis reads: about 2,500 tokens. */
+    static final int ANALYSIS_CHARS = 8_000;
+
+    /**
+     * The end of the conversation that the analysis gets: the newest messages that fit {@link #ANALYSIS_CHARS} (older tool results
+     * shortened as for the agent), starting at a user message, and always the user's latest message with what follows it. The analysis only
+     * chooses a route, and it was sent the whole conversation (132,000 characters: seven minutes for the server to read, with the
+     * single slot busy with other requests).
+     */
+    static List<ChatMessage> analysisWindow(List<ChatMessage> all) {
+        List<ChatMessage> groomed = ContextGroom.apply(all);
+        int lastUser = -1;
+        for (int i = groomed.size() - 1; i >= 0 && lastUser < 0; i--) {
+            if (groomed.get(i) instanceof UserMessage) lastUser = i;
+        }
+        if (lastUser < 0) return groomed;
+        int start = lastUser;
+        int size = 0;
+        for (int i = groomed.size() - 1; i >= 0; i--) {
+            size += SummaryMemory.estimateTokens(groomed.get(i)) * 4;
+            if (size > ANALYSIS_CHARS) break;
+            if (groomed.get(i) instanceof UserMessage) start = i;
+        }
+        return new ArrayList<>(groomed.subList(Math.min(start, lastUser), groomed.size()));
+    }
+
     /**
      * Once per turn, before the agent: asks the model what to do with the user's latest message ({@link Analyzer}, {@link AnalyzeMessage}):
      * it returns the goal, written so that it stands alone, and where to go next. The edges it may name are the ones of the annotation
@@ -953,7 +979,7 @@ public class AgentGraph {
                 : toolCalls.tools().specifications(Set.of(OFFERS.tools())::contains);
         Analysis.Offered offered = new Analysis.Offered(edges.stream().map(Offers.Edge::name).collect(Collectors.toSet()),
                 tools.stream().map(dev.langchain4j.agent.tool.ToolSpecification::name).collect(Collectors.toSet()), mayAsk);
-        Optional<Analysis> analysis = analyzer.analyze(AnalyzeMessage.compose(edges, tools, mayAsk, all), offered);
+        Optional<Analysis> analysis = analyzer.analyze(AnalyzeMessage.compose(edges, tools, mayAsk, analysisWindow(all)), offered);
         if (analysis.isEmpty()) {
             AgentLog.current().line("⇢ analysis: no usable answer, the agent takes it");
             return Map.of();
@@ -1060,14 +1086,15 @@ public class AgentGraph {
         String jobs = jobStartedThisTurn(state.messages()) ? "" : JobLedger.note(state.messages());
         if (!jobs.isEmpty()) notes.add(jobs);
         if (!notes.isEmpty()) messages.add(UserMessage.from("Notes from the program (not from the user):\n\n" + String.join("\n\n", notes)));
-        // Tool specs: skip on the last round (no calls will run) to save tokens; one extra cache miss.
-        ChatRequest.Builder request;
+        // The tool list is sent on the last round too, although no call will run: the chat template puts the
+        // tools at the very start of the prompt, and a request without them would make the model server
+        // re-read the whole conversation instead of reusing what it has cached (the next turn then started cold:
+        // 16,000 tokens at 90 a second, three minutes).
+        ChatRequest.Builder request = ChatRequest.builder().toolSpecifications(toolCalls.tools().specifications());
         if (lastRound) {
+            // Only this request needs it, so it isn't stored in the state
             messages.add(UserMessage.from("You have used " + MAX_AGENT_ROUNDS + " rounds of tool calls in this turn."
                     + " Answer now without tool calls: say what is done and what is left."));
-            request = ChatRequest.builder();
-        } else {
-            request = ChatRequest.builder().toolSpecifications(toolCalls.tools().specifications());
         }
         AiMessage reply = model.chat(request.messages(messages).build()).aiMessage(); // blocks until Lemonade answers
         if (!lastRound && announcesWithoutActing(reply)) reply = afterAnnouncement(state, request, messages, reply);

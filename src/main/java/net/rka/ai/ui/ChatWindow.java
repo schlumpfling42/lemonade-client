@@ -1197,7 +1197,12 @@ public class ChatWindow extends Application {
 
         sidebar.getChildren().addAll(newChat, heading, conversations);
         sidebar.setPadding(new Insets(12));
-        sidebar.setPrefWidth(260);
+        sidebar.setPrefWidth(ui.sidebarWidth != null ? ui.sidebarWidth : 260);
+        // Persist the width whenever it changes (e.g. by a resize handle), not only on window resize
+        sidebar.prefWidthProperty().addListener((obs, oldV, newV) -> {
+            ui.sidebarWidth = newV.doubleValue();
+            ui.save();
+        });
         sidebar.getStyleClass().add("sidebar");
         refreshList(); // read the conversations folder
     }

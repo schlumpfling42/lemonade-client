@@ -35,6 +35,8 @@ final class UiState {
     /** The two boxes of that sidebar: hold every request / every answer until the person lets it go. */
     public boolean holdRequests;
     public boolean holdResponses;
+        /** The preferred width of the sidebar, in pixels. */
+        public Double sidebarWidth;
 
     @JsonIgnore
     private Path file;
