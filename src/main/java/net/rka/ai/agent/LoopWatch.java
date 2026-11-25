@@ -53,6 +53,10 @@ final class LoopWatch {
      */
     static Map<String, Object> check(String node, AgentState state, Map<String, Object> updates) {
         if (updates == null || updates.isEmpty() || ENDS_BY_ITSELF.contains(node)) return updates;
+        // Only empty lists: nothing was added to the state, so there is no result to compare. The approval step answers with an empty
+        // list of messages whenever every call was approved, and four approved commands in a turn stopped it as a "loop".
+        if (updates.entrySet().stream().allMatch(e -> e.getKey().equals(KEY) || e.getValue() == null
+                || e.getValue() instanceof Collection<?> items && items.isEmpty())) return updates;
         String fingerprint = fingerprint(updates);
         Map<String, String> watch = state.<Map<String, String>>value(KEY).orElseGet(Map::of);
         String before = watch.get(node);

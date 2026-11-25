@@ -52,6 +52,14 @@ class LoopWatchTest {
     }
 
     @Test
+    void anEmptyListOfMessagesIsNoResultSoApprovingFourCommandsInATurnIsNotALoop() {
+        // approval/review answers with an empty list of messages whenever every call was approved
+        Map<String, Object> state = Map.of();
+        for (int i = 0; i < 10; i++) state = run(state, "approval/review", Map.of("messages", List.of()));
+        assertTrue(!state.containsKey(LoopWatch.KEY), state.toString()); // nothing was counted
+    }
+
+    @Test
     void theAgentAndItsToolsStepEndByThemselvesAndAreNotWatched() {
         Map<String, Object> state = Map.of();
         for (int i = 0; i < 3 * LoopWatch.LIMIT; i++) state = run(state, "agent", Map.of("messages", call("id" + i)));
