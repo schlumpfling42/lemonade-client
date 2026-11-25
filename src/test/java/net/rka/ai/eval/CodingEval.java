@@ -39,7 +39,11 @@ import java.util.stream.Stream;
 @EnabledIfEnvironmentVariable(named = "CODING_EVAL", matches = "true")
 class CodingEval {
 
-    private record Task(String name, Map<String, String> files, String goal, Function<Path, String> check) {
+    /** @param big whether the goal asks for several separate things: the job must then split it into steps (and ask the user to approve them), a small goal must not be split */
+    private record Task(String name, Map<String, String> files, String goal, Function<Path, String> check, boolean big) {
+        Task(String name, Map<String, String> files, String goal, Function<Path, String> check) {
+            this(name, files, goal, check, false);
+        }
     }
 
     private static final String GREETER = "public class Greeter {\n    public String greet(String name) {\n        return \"Hello, \" + name;\n    }\n}\n";
@@ -82,6 +86,27 @@ class CodingEval {
                 "Add a method farewell(String name) to Greeter that returns \"Bye, \" and the name, and print it in Main.main after the greeting.",
                 dir -> contains(dir, "Greeter.java", "farewell(String name)") + contains(dir, "Greeter.java", "\"Bye, \"")
                         + contains(dir, "Main.java", "farewell(") + compiles(dir)));
+        // Big goals: several separate things. The job splits them into steps (the user approves the list) and works on one step at a time.
+        tasks.add(new Task("three-separate-edits", Map.of("Greeter.java", GREETER, "Counter.java", COUNTER,
+                "build.gradle", "plugins {\n    id 'java'\n}\n\ngroup = 'demo'\nversion = '1.0'\n"),
+                "Three things: in Greeter.greet change the greeting from Hello to Hi; add a method reset() to Counter that sets the count back to 0; "
+                        + "and change the version in build.gradle to 1.1.",
+                dir -> contains(dir, "Greeter.java", "\"Hi, \"") + notContains(dir, "Greeter.java", "\"Hello, \"")
+                        + contains(dir, "Counter.java", "void reset()") + contains(dir, "Counter.java", "count = 0")
+                        + contains(dir, "build.gradle", "version = '1.1'") + compiles(dir), true));
+        tasks.add(new Task("counter-feature-and-use", Map.of("Counter.java", COUNTER, "Greeter.java", GREETER, "Main.java", MAIN),
+                "Extend Counter with three methods: reset() that sets the count back to 0, decrement() that subtracts one, and add(int n) that adds n. "
+                        + "Then make Main.main use them: after the greeting print the value of a Counter after increment(), after add(5) and after reset().",
+                dir -> contains(dir, "Counter.java", "void reset()") + contains(dir, "Counter.java", "void decrement()")
+                        + contains(dir, "Counter.java", "void add(int n)") + contains(dir, "Main.java", "reset()") + contains(dir, "Main.java", "add(5)")
+                        + compiles(dir)));
+        tasks.add(new Task("four-separate-edits", Map.of("Greeter.java", GREETER, "Counter.java", COUNTER,
+                "build.gradle", "plugins {\n    id 'java'\n}\n\ngroup = 'demo'\nversion = '1.0'\n",
+                "style.css", ".title {\n    color: black;\n    font-size: 12px;\n}\n"),
+                "Four unrelated things: in Greeter.greet change the greeting from Hello to Hi; fix Counter.increment, which goes down instead of up; "
+                        + "change the version in build.gradle to 1.1; and make the title in style.css 18px.",
+                dir -> contains(dir, "Greeter.java", "\"Hi, \"") + notContains(dir, "Counter.java", "count--") + contains(dir, "build.gradle", "version = '1.1'")
+                        + contains(dir, "style.css", "font-size: 18px") + compiles(dir), true));
         return tasks;
     }
 
@@ -89,12 +114,22 @@ class CodingEval {
     void theCodingFlowOnSimpleTasks() throws Exception {
         String only = System.getenv("CODING_EVAL_ONLY");
         Path out = Files.createDirectories(Path.of("build", "eval"));
+        // What the job asked the user (the list of steps of a big goal), so the eval can tell whether it split the goal
+        List<String> questions = new ArrayList<>();
         Approver approveAll = new Approver() {
             @Override
             public Map<String, Boolean> review(List<ToolExecutionRequest> calls) {
                 Map<String, Boolean> decisions = new HashMap<>();
                 calls.forEach(call -> decisions.put(call.id(), true));
                 return decisions;
+            }
+
+            @Override
+            public net.rka.ai.agent.skills.SkillAnswer askUser(net.rka.ai.agent.skills.SkillQuestion question) {
+                // Only the coding job's own question (the steps of a big goal); the analysis' questions are not answered
+                if (!"coding".equals(question.skill())) return net.rka.ai.agent.skills.SkillAnswer.dismissed();
+                questions.add(question.question());
+                return new net.rka.ai.agent.skills.SkillAnswer(question.choices().getFirst(), ""); // "Do these steps"
             }
 
             @Override
@@ -113,6 +148,7 @@ class CodingEval {
                 total++;
                 Path dir = fresh(out.resolve("work").resolve(task.name()));
                 for (Map.Entry<String, String> file : task.files().entrySet()) Files.writeString(dir.resolve(file.getKey()), file.getValue());
+                questions.clear();
                 long start = System.nanoTime();
                 String note = "";
                 String answer = "";
@@ -126,6 +162,9 @@ class CodingEval {
                 }
                 long seconds = Math.round((System.nanoTime() - start) / 1e9);
                 String failure = note.isEmpty() ? task.check().apply(dir) : note;
+                // The first step of a job: a big goal is split into steps (the list is put to the user), a small one is not
+                if (note.isEmpty() && task.big() && questions.isEmpty()) failure += "a big goal was not split into steps; ";
+                if (note.isEmpty() && !task.big() && !questions.isEmpty()) failure += "a small goal was split into steps: " + questions.getFirst().lines().skip(2).findFirst().orElse("") + "; ";
                 boolean ok = failure.isBlank();
                 if (ok) passed++;
                 report.append("| ").append(task.name()).append(" | ").append(ok ? "pass" : "FAIL").append(" | ").append(seconds).append(" | ")
@@ -134,7 +173,8 @@ class CodingEval {
                         .append("\n\nWhat the assistant said:\n\n").append(answer.strip()).append("\n\nFiles after:\n");
                 try (Stream<Path> files = Files.list(dir)) {
                     for (Path file : files.sorted().toList()) {
-                        if (Files.isRegularFile(file)) details.append("\n### ").append(file.getFileName()).append("\n```\n").append(Files.readString(file)).append("```\n");
+                        // the files the model compiled into the folder (.class) are not text
+                        if (Files.isRegularFile(file) && !file.toString().endsWith(".class")) details.append("\n### ").append(file.getFileName()).append("\n```\n").append(Files.readString(file)).append("```\n");
                     }
                 }
             }

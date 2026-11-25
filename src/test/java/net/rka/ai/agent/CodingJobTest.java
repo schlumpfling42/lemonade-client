@@ -208,6 +208,24 @@ class CodingJobTest {
     }
 
     @Test
+    void aStepThatSaysItIsStuckEndsTheBigJobAndTheStepsAlreadyDoneStayInTheReport() throws Exception {
+        model.answers.add(AiMessage.from(START));
+        model.roadmap = "{\"milestones\": [\"Step A\", \"Step B\", \"Step C\"]}";
+        approver.answersToQuestions.add(new net.rka.ai.agent.skills.SkillAnswer("Do these steps", ""));
+        answers("Did A.\nSTEP: done", "The edit kept failing.\nSTEP: stuck: no md5"); // step C must not start
+
+        List<ChatMessage> produced = run();
+
+        List<String> work = model.requests.stream().map(CodingJobTest::text).filter(t -> t.contains("Do only this step now")).toList();
+        assertEquals(2, work.size(), work.toString());
+        ToolExecutionResultMessage report = assertInstanceOf(ToolExecutionResultMessage.class, produced.get(1));
+        assertFalse(report.text().startsWith("Every step is done"), report.text());
+        assertTrue(report.text().contains("## Step A\nDid A.") && report.text().contains("The edit kept failing."), report.text());
+        assertFalse(report.text().contains("Step C"), report.text());
+        assertTrue(model.answers.isEmpty());
+    }
+
+    @Test
     void agentStartsAJobAndAnswersWithTheReport() throws Exception {
         model.answers.add(AiMessage.from(START));
         answers(PLAN, EDIT);

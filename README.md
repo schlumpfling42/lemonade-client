@@ -491,7 +491,8 @@ told, in a note at the end of each request, how the earlier coding jobs ended.
 their code), and a plan can carry a change as a **patch**: the few lines that change with the lines around them, found by those lines. Files that are not Java (style sheets, build files, JSON, Markdown) are searched the same way, and small ones are shown whole. The graph
 applies patches itself, without asking the model to write the section again, and a patch that fits nowhere is told back while the plan is made.
 `CodingEval` (a test, off by default: set `CODING_EVAL=true` and run `.\gradlew.bat :test --tests "*CodingEval*"`) runs simple tasks against the
-real model and writes `build/eval/coding-eval.md`.
+real model and writes `build/eval/coding-eval.md` (what each task changed, how long it took). It also checks the job's first decision: the big tasks
+(`three-separate-edits`, `counter-feature-and-use`) must be split into steps, which the eval approves, and the small ones must not be; `CODING_EVAL_ONLY=three-separate-edits` runs one.
 
 File text is kept out of the conversation where it can: reads are small (12,000 characters, a bigger Java file gives its outline), the
 research step has no raw file reads, a read that was done again or that an edit made out of date is replaced by a one-line note, and a
