@@ -27,7 +27,7 @@ final class AnalyzeMessage {
 
     /** Constant: who the model is here and what each function is for. */
     static final String SYSTEM = "You decide what happens with the user's latest message. Answer with one function call:\n"
-            + "route: go on. Write the goal as one sentence that stands alone, every thing it refers to written out (not \"that\", \"it\", \"the plan\").\n"
+            + "route: go on. Write the goal as one sentence that stands alone, every thing it refers to written out (not \"that\", \"it\", \"the plan\"). Keep it as big as the request and no bigger: only what was asked, about what the user named or pointed at (the dialog, file or thing just discussed); never \"all\", \"every\" or \"everywhere\" unless the user said so.\n"
             + "ask_user: only when the request is so unclear that a short question settles it, even with the conversation read. A message about what was just said or done (why, what, did you) is a question about the conversation: route it to agent.\n"
             + "a tool: only when you must look at the project before you can choose.";
 

@@ -388,6 +388,15 @@ public final class GenericKinds {
         return Map.of(State.MESSAGES, List.of(answer), State.SKILL_RESULT, text);
     }
 
+    /** The tools that change a file: a visit that called none of them has only read. */
+    static final Set<String> CHANGING_TOOLS = Set.of("editSection", "patchFile", "writeFile");
+
+    /** Whether the visit made a call that changes a file. */
+    static boolean changedSomething(List<ChatMessage> visit) {
+        return visit.stream().anyMatch(m -> m instanceof AiMessage ai
+                && ai.toolExecutionRequests().stream().anyMatch(call -> CHANGING_TOOLS.contains(call.name())));
+    }
+
     /** The current visit's conversation of a {@code model} node: from its prompt (the last user message) on. */
     private static List<ChatMessage> visitMessages(State state) {
         List<ChatMessage> messages = state.skillMessages();
@@ -554,7 +563,7 @@ public final class GenericKinds {
     /** Asks the model; with {@code tools}, a ReAct loop. The answer goes to {@code output}. */
     private static final class Model extends Spec {
         Model() {
-            super("model", Set.of("prompt"), Set.of("tools", "output", "format", "thinking", "maxTokens", "effort", "history"));
+            super("model", Set.of("prompt"), Set.of("tools", "output", "format", "thinking", "maxTokens", "effort", "history", "editBy"));
         }
 
         @Override
@@ -574,6 +583,10 @@ public final class GenericKinds {
             Object maxTokens = node.fields().get("maxTokens");
             if (maxTokens != null && !(maxTokens instanceof Integer n && n >= 50 && n <= 32_000)) {
                 errors.add(where(node) + "`maxTokens` must be a whole number from 50 to 32000.");
+            }
+            Object editBy = node.fields().get("editBy");
+            if (editBy != null && !(editBy instanceof Integer n && n >= 2 && n <= 40)) {
+                errors.add(where(node) + "`editBy` must be a whole number from 2 to 40.");
             }
         }
 
@@ -601,6 +614,7 @@ public final class GenericKinds {
             Set<String> tools = listedTools(node, runtime.toolCalls().tools());
             int maxRounds = runtime.skill().limits().maxToolRounds();
             Integer maxTokens = node.fields().get("maxTokens") instanceof Integer n ? n : null; // null: the model's own limit
+            Integer editBy = node.fields().get("editBy") instanceof Integer n ? n : null; // null: no nudge to change something
             boolean history = Boolean.TRUE.equals(node.fields().get("history")); // the conversation before the skill, in front of the prompt
             String system = runtime.skill().description() + "\n\n" + PREAMBLE;
             return (state, config) -> {
@@ -624,6 +638,13 @@ public final class GenericKinds {
                 if (node.fields().get("effort") instanceof String effort) request.parameters(net.rka.ai.agent.Effort.parameters(effort));
                 if (maxTokens != null) request.maxOutputTokens(maxTokens); // a step that writes notes has no use for a runaway reply
                 List<ChatMessage> sent = new ArrayList<>(messages);
+                // A model that only reads: after editBy rounds without a change it is told to decide (only this request needs it, so it is
+                // not stored). A step once read for 21 rounds, undid its one edit with git and ran 37 minutes without a result.
+                if (editBy != null && continuing && rounds >= editBy && offerTools && !changedSomething(visitMessages(state))) {
+                    sent.add(UserMessage.from("You have used " + rounds + " rounds and changed nothing yet. Do not read anything else: decide now what to change"
+                            + " and make the change with your next call (patchFile, editSection or writeFile). If you cannot say what to change, answer"
+                            + " with what you need to know."));
+                }
                 if (offerTools) {
                     // Only the listed tools, so the model isn't offered calls that would be refused
                     request.toolSpecifications(runtime.toolCalls().tools().specifications(tools::contains));

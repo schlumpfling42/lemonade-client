@@ -91,6 +91,26 @@ class CodingEval {
                 "public class Dialog {\n    public String title() {\n        return \"Approve command\";\n    }\n\n    public String body() {\n        return \"The agent wants to run a command. It changes files in the trusted folder and runs only with your approval, or if you trust the tool. Always: run now and do not ask again.\";\n    }\n}\n"),
                 "The dialog shows too much prose in its body. Show only the first sentence in the body and move the full text into a tooltip: add a method tooltip() that returns it.",
                 dir -> contains(dir, "Dialog.java", "String tooltip()") + contains(dir, "Dialog.java", "Always: run now") + notContains(dir, "Dialog.java", "String body() {\n        return \"The agent wants to run a command. It changes") + compiles(dir)));
+        // The same kind of request next to a sibling that must stay as it is: the job does what was named, nothing wider (a real run read and
+        // started to change every dialog of the app, and ran 37 minutes)
+        String label = "public class Label {\n    public final String text;\n    private Tooltip tooltip;\n\n    public Label(String text) {\n        this.text = text;\n    }\n\n    public void setTooltip(Tooltip tooltip) {\n        this.tooltip = tooltip;\n    }\n}\n";
+        String tooltip = "public class Tooltip {\n    public final String text;\n\n    public Tooltip(String text) {\n        this.text = text;\n    }\n}\n";
+        String approvalDialog = "import java.util.List;\n\npublic class ApprovalDialog {\n    public List<Label> content() {\n"
+                + "        Label why = new Label(\"This tool changes files in the trusted folder. It runs only with your approval, or if you trust the tool.\");\n"
+                + "        Label trustHelp = new Label(\"Always: run now and do not ask again. A star matches any arguments. Commands with special characters can only be run once.\");\n"
+                + "        return List.of(why, trustHelp);\n    }\n}\n";
+        String planDialog = "import java.util.List;\n\npublic class PlanDialog {\n    public List<Label> content() {\n"
+                + "        Label help = new Label(\"Approve runs every change of the plan. Revise sends it back with your comment. Deny stops the job and changes nothing.\");\n"
+                + "        return List.of(help);\n    }\n}\n";
+        tasks.add(new Task("scoped-prose-to-tooltip", Map.of("Label.java", label, "Tooltip.java", tooltip, "ApprovalDialog.java", approvalDialog, "PlanDialog.java", planDialog),
+                "The approval dialog shows too much prose. Show only the first sentence of each explanation in it and put the full text in a tooltip next to it.",
+                dir -> contains(dir, "ApprovalDialog.java", "This tool changes files in the trusted folder.")
+                        + contains(dir, "ApprovalDialog.java", "It runs only with your approval, or if you trust the tool.")
+                        + contains(dir, "ApprovalDialog.java", "Commands with special characters can only be run once.")
+                        + (read(dir, "ApprovalDialog.java").split("new Tooltip\\(", -1).length - 1 >= 2 ? "" : "ApprovalDialog has no tooltip for both texts; ")
+                        + (read(dir, "ApprovalDialog.java").contains("new Label(\"This tool changes files in the trusted folder. It runs only") ? "the long text is still shown; " : "")
+                        + (read(dir, "PlanDialog.java").equals(planDialog) ? "" : "PlanDialog was changed, it was not asked for; ")
+                        + (read(dir, "Label.java").equals(label) && read(dir, "Tooltip.java").equals(tooltip) ? "" : "Label or Tooltip was changed; ") + compiles(dir)));
         // Big goals: several separate things. The job splits them into steps (the user approves the list) and works on one step at a time.
         tasks.add(new Task("three-separate-edits", Map.of("Greeter.java", GREETER, "Counter.java", COUNTER,
                 "build.gradle", "plugins {\n    id 'java'\n}\n\ngroup = 'demo'\nversion = '1.0'\n"),

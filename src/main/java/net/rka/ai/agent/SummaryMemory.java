@@ -50,8 +50,11 @@ final class SummaryMemory {
             + "AI assistant that uses tools. Write a concise summary that preserves everything needed to "
             + "continue the conversation: the user's goals and requests, decisions made, facts learned, "
             + "important tool results (file names, paths, command output, URLs), and open tasks. "
-            + "Merge the previous summary with the new messages. Use short bullet points. "
-            + "Write only the summary, no preamble.";
+            + "Merge the previous summary with the new messages. Use at most 12 short bullet points, one line each "
+            + "(keep names, paths and decisions, drop the rest). Write only the summary, no preamble.";
+
+    /** The most the summary may write: a runaway summary costs minutes at the speed of a local model. */
+    static final int SUMMARY_TOKENS = 1_200;
 
     private static final int MAX_TOOL_TEXT = 600; // characters of each tool result fed to the summarizer
 
@@ -116,7 +119,9 @@ final class SummaryMemory {
         }
         prompt.append("New messages to add to the summary:\n").append(transcript(messages));
         ChatRequest request = ChatRequest.builder()
+                .parameters(Effort.parameters("low")) // a summary is not worth long thinking (a short one once took five minutes)
                 .messages(SystemMessage.from(INSTRUCTIONS), UserMessage.from(prompt.toString()))
+                .maxOutputTokens(SUMMARY_TOKENS)
                 .build();
         String summary = model.chat(request).aiMessage().text();
         return summary == null ? "" : summary.strip();
@@ -130,7 +135,9 @@ final class SummaryMemory {
         prompt.append("Current summary:\n").append(previousSummary.strip()).append("\n\n");
         prompt.append("New messages to add:\n").append(transcript(newMessages));
         ChatRequest request = ChatRequest.builder()
+                .parameters(Effort.parameters("low")) // a summary is not worth long thinking (a short one once took five minutes)
                 .messages(SystemMessage.from(INSTRUCTIONS), UserMessage.from(prompt.toString()))
+                .maxOutputTokens(SUMMARY_TOKENS)
                 .build();
         String summary = model.chat(request).aiMessage().text();
         return summary == null ? "" : summary.strip();

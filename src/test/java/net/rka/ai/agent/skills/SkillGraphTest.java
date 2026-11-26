@@ -426,6 +426,51 @@ class SkillGraphTest {
     }
 
     @Test
+    void aModelThatOnlyReadsIsToldToChangeSomethingAfterEditByRoundsAndNotBefore() throws Exception {
+        SkillFile skill = load("""
+                { "name": "fixer", "description": "%s",
+                  "limits": { "maxToolRounds": 8 },
+                  "start": "work",
+                  "nodes": [
+                    { "id": "work", "kind": "model", "prompt": "Fix a.txt.", "tools": ["readFile", "writeFile"], "editBy": 2, "output": "text", "next": "done" },
+                    { "id": "done", "kind": "finish", "result": "{{text}}" } ] }
+                """.formatted(DESCRIPTION));
+        java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+        model.rule = request -> calls.incrementAndGet() <= 3
+                ? AiMessage.from(List.of(call("r" + calls.get(), "readFile", "{\"path\":\"a" + calls.get() + ".txt\"}")))
+                : AiMessage.from("Could not decide.");
+        State state = start(call("s1", skill.toolName(), "{}"));
+
+        assertFalse(isError(answer(state, "s1")));
+        assertEquals(4, model.requests.size());
+        // rounds 0 and 1: no nudge; from round 2 (editBy) on, with nothing changed: the nudge, only in the request
+        for (int i = 0; i < 2; i++) assertFalse(model.requests.get(i).messages().getLast().toString().contains("changed nothing yet"), "request " + i);
+        assertTrue(model.requests.get(2).messages().getLast().toString().contains("2 rounds and changed nothing yet"), model.requests.get(2).messages().getLast().toString());
+        assertTrue(model.requests.get(3).messages().getLast().toString().contains("3 rounds and changed nothing yet"));
+    }
+
+    @Test
+    void aVisitHasChangedSomethingOnlyWhenItCalledAToolThatWritesAFile() {
+        ToolExecutionRequest read = call("c1", "readFile", "{}");
+        ToolExecutionRequest patch = call("c2", "patchFile", "{}");
+        assertFalse(GenericKinds.changedSomething(List.of(UserMessage.from("go"), AiMessage.from(List.of(read)))));
+        assertTrue(GenericKinds.changedSomething(List.of(UserMessage.from("go"), AiMessage.from(List.of(read)), AiMessage.from(List.of(patch)))));
+    }
+
+    @Test
+    void editByMustBeAWholeNumberFrom2To40() {
+        for (String bad : List.of("1", "41", "\"six\"")) {
+            String json = """
+                    { "name": "bad", "description": "%s", "start": "work",
+                      "nodes": [ { "id": "work", "kind": "model", "prompt": "x", "editBy": %s, "output": "t", "next": "done" },
+                                 { "id": "done", "kind": "finish", "result": "{{t}}" } ] }
+                    """.formatted(DESCRIPTION, bad);
+            List<String> errors = new SkillValidator(GenericKinds.all(), toolCalls.tools()).validate(SkillFile.parse(json), false);
+            assertTrue(errors.stream().anyMatch(e -> e.contains("`editBy` must be a whole number from 2 to 40")), bad + ": " + errors);
+        }
+    }
+
+    @Test
     void maxStepsStopsALoop() throws Exception {
         SkillFile skill = load("""
                 { "name": "spin", "description": "%s",
