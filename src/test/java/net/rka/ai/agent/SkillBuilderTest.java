@@ -315,7 +315,7 @@ class SkillBuilderTest {
             assertTrue(first.contains(expected), expected + " in " + first);
         }
         SkillDraft draft = approver.drafts.getFirst();
-        assertTrue(draft.toMarkdown().contains("**Limits:** maxSteps 300 · maxToolRounds 12"), draft.toMarkdown());
+        assertTrue(draft.toMarkdown().contains("**Limits:** maxSteps 300 · maxToolRounds 30"), draft.toMarkdown());
         assertTrue(draft.toMarkdown().contains("maxVerifyAttempts 3"), draft.toMarkdown());
         assertTrue(draft.replaces());
         assertTrue(draft.replacesBuiltIn());

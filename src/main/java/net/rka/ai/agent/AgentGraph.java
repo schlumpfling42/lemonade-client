@@ -936,18 +936,54 @@ public class AgentGraph {
     static List<ChatMessage> analysisWindow(List<ChatMessage> all) {
         List<ChatMessage> groomed = ContextGroom.apply(all);
         int lastUser = -1;
-        for (int i = groomed.size() - 1; i >= 0 && lastUser < 0; i--) {
-            if (groomed.get(i) instanceof UserMessage) lastUser = i;
+        int previousUser = -1;
+        for (int i = groomed.size() - 1; i >= 0 && previousUser < 0; i--) {
+            if (!(groomed.get(i) instanceof UserMessage)) continue;
+            if (lastUser < 0) lastUser = i;
+            else previousUser = i;
         }
         if (lastUser < 0) return groomed;
-        int start = lastUser;
-        int size = 0;
-        for (int i = groomed.size() - 1; i >= 0; i--) {
-            size += SummaryMemory.estimateTokens(groomed.get(i)) * 4;
-            if (size > ANALYSIS_CHARS) break;
-            if (groomed.get(i) instanceof UserMessage) start = i;
+        // Whatever the previous turn said is clipped, never cut away: "retry", "continue" and "go on" only mean something with it. (A window
+        // that was only the user's latest message, because the last answer was long, made the analysis ask "retry what?" twice.)
+        List<ChatMessage> clipped = new ArrayList<>(groomed.size());
+        for (int i = 0; i < groomed.size(); i++) {
+            clipped.add(i < lastUser ? clip(groomed.get(i)) : groomed.get(i));
         }
-        return new ArrayList<>(groomed.subList(Math.min(start, lastUser), groomed.size()));
+        int start = previousUser >= 0 ? previousUser : lastUser;
+        int size = 0;
+        for (int i = clipped.size() - 1; i >= start; i--) size += SummaryMemory.estimateTokens(clipped.get(i)) * 4;
+        for (int i = start - 1; i >= 0 && size <= ANALYSIS_CHARS; i--) {
+            size += SummaryMemory.estimateTokens(clipped.get(i)) * 4;
+            if (size > ANALYSIS_CHARS) break;
+            if (clipped.get(i) instanceof UserMessage) start = i;
+        }
+        return new ArrayList<>(clipped.subList(start, clipped.size()));
+    }
+
+    /**
+     * The window with the coding jobs of the conversation in front (what each one was and how it ended, {@link JobLedger}), as the agent
+     * is told them: "retry" is about the last job, and its goal and outcome are not always in the window.
+     */
+    static List<ChatMessage> withJobs(List<ChatMessage> window, List<ChatMessage> all) {
+        String jobs = JobLedger.note(all);
+        if (jobs.isEmpty()) return window;
+        List<ChatMessage> out = new ArrayList<>(window.size() + 1);
+        out.add(UserMessage.from(jobs));
+        out.addAll(window);
+        return out;
+    }
+
+    /** The most characters of one earlier message the analysis reads. */
+    static final int ANALYSIS_MESSAGE_CHARS = 1_500;
+
+    private static ChatMessage clip(ChatMessage message) {
+        if (message instanceof AiMessage ai && !ai.hasToolExecutionRequests() && ai.text() != null && ai.text().length() > ANALYSIS_MESSAGE_CHARS) {
+            return AiMessage.from(ai.text().substring(0, ANALYSIS_MESSAGE_CHARS) + " [… cut]");
+        }
+        if (message instanceof UserMessage user && user.hasSingleText() && user.singleText().length() > ANALYSIS_MESSAGE_CHARS) {
+            return UserMessage.from(user.singleText().substring(0, ANALYSIS_MESSAGE_CHARS) + " [… cut]");
+        }
+        return message;
     }
 
     /**
@@ -979,7 +1015,7 @@ public class AgentGraph {
                 : toolCalls.tools().specifications(Set.of(OFFERS.tools())::contains);
         Analysis.Offered offered = new Analysis.Offered(edges.stream().map(Offers.Edge::name).collect(Collectors.toSet()),
                 tools.stream().map(dev.langchain4j.agent.tool.ToolSpecification::name).collect(Collectors.toSet()), mayAsk);
-        Optional<Analysis> analysis = analyzer.analyze(AnalyzeMessage.compose(edges, tools, mayAsk, analysisWindow(all)), offered);
+        Optional<Analysis> analysis = analyzer.analyze(AnalyzeMessage.compose(edges, tools, mayAsk, withJobs(analysisWindow(all), all)), offered);
         if (analysis.isEmpty()) {
             AgentLog.current().line("⇢ analysis: no usable answer, the agent takes it");
             return Map.of();

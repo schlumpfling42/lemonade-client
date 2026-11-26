@@ -86,6 +86,11 @@ class CodingEval {
                 "Add a method farewell(String name) to Greeter that returns \"Bye, \" and the name, and print it in Main.main after the greeting.",
                 dir -> contains(dir, "Greeter.java", "farewell(String name)") + contains(dir, "Greeter.java", "\"Bye, \"")
                         + contains(dir, "Main.java", "farewell(") + compiles(dir)));
+        // A vague request about the look of a dialog (a step of this once ran out of rounds reading): it must end with the change made
+        tasks.add(new Task("prose-to-tooltip", Map.of("Dialog.java",
+                "public class Dialog {\n    public String title() {\n        return \"Approve command\";\n    }\n\n    public String body() {\n        return \"The agent wants to run a command. It changes files in the trusted folder and runs only with your approval, or if you trust the tool. Always: run now and do not ask again.\";\n    }\n}\n"),
+                "The dialog shows too much prose in its body. Show only the first sentence in the body and move the full text into a tooltip: add a method tooltip() that returns it.",
+                dir -> contains(dir, "Dialog.java", "String tooltip()") + contains(dir, "Dialog.java", "Always: run now") + notContains(dir, "Dialog.java", "String body() {\n        return \"The agent wants to run a command. It changes") + compiles(dir)));
         // Big goals: several separate things. The job splits them into steps (the user approves the list) and works on one step at a time.
         tasks.add(new Task("three-separate-edits", Map.of("Greeter.java", GREETER, "Counter.java", COUNTER,
                 "build.gradle", "plugins {\n    id 'java'\n}\n\ngroup = 'demo'\nversion = '1.0'\n"),

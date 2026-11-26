@@ -208,10 +208,11 @@ class CodingJobTest {
     }
 
     @Test
-    void aStepThatSaysItIsStuckEndsTheBigJobAndTheStepsAlreadyDoneStayInTheReport() throws Exception {
+    void aStuckStepAsksAndStoppingEndsTheBigJobWithTheStepsAlreadyDoneInTheReport() throws Exception {
         model.answers.add(AiMessage.from(START));
         model.roadmap = "{\"milestones\": [\"Step A\", \"Step B\", \"Step C\"]}";
         approver.answersToQuestions.add(new net.rka.ai.agent.skills.SkillAnswer("Do these steps", ""));
+        approver.answersToQuestions.add(new net.rka.ai.agent.skills.SkillAnswer("Stop here", ""));
         answers("Did A.\nSTEP: done", "The edit kept failing.\nSTEP: stuck: no md5"); // step C must not start
 
         List<ChatMessage> produced = run();
@@ -222,6 +223,30 @@ class CodingJobTest {
         assertFalse(report.text().startsWith("Every step is done"), report.text());
         assertTrue(report.text().contains("## Step A\nDid A.") && report.text().contains("The edit kept failing."), report.text());
         assertFalse(report.text().contains("Step C"), report.text());
+        assertTrue(model.answers.isEmpty());
+    }
+
+    @Test
+    void aStuckStepCanBeTriedAgainWithItsFirstReportOrSkipped() throws Exception {
+        model.answers.add(AiMessage.from(START));
+        model.roadmap = "{\"milestones\": [\"Step A\", \"Step B\", \"Step C\"]}";
+        approver.answersToQuestions.add(new net.rka.ai.agent.skills.SkillAnswer("Do these steps", ""));
+        approver.answersToQuestions.add(new net.rka.ai.agent.skills.SkillAnswer("Try this step again", ""));  // A is stuck: again
+        approver.answersToQuestions.add(new net.rka.ai.agent.skills.SkillAnswer("Skip it and go on", ""));    // B is stuck: skip
+        answers("Read only.\nSTEP: stuck: out of rounds", "Now A is made.\nSTEP: done", "No way.\nSTEP: stuck: no idea", "Made C.\nSTEP: done");
+
+        List<ChatMessage> produced = run();
+
+        List<String> work = model.requests.stream().map(CodingJobTest::text).filter(t -> t.contains("Do only this step now")).toList();
+        assertEquals(4, work.size(), work.toString());
+        // the second try of A starts from what the first one reported
+        assertTrue(work.get(1).contains("Do only this step now: Step A") && work.get(1).contains("Read only."), work.get(1));
+        assertTrue(work.get(3).contains("Do only this step now: Step C"), work.get(3));
+        assertEquals(2, approver.questions.stream().filter(q -> q.question().startsWith("This step did not finish")).count(), approver.questions.toString());
+        ToolExecutionResultMessage report = assertInstanceOf(ToolExecutionResultMessage.class, produced.get(1));
+        assertTrue(report.text().startsWith("Every step is done"), report.text());
+        assertTrue(report.text().contains("## Step A\nNow A is made.") && report.text().contains("## Step B\nSkipped") && report.text().contains("## Step C\nMade C."),
+                report.text());
         assertTrue(model.answers.isEmpty());
     }
 
@@ -268,6 +293,28 @@ class CodingJobTest {
         assertTrue(analysis.toolSpecifications().stream().anyMatch(t -> t.name().equals("route")), "the model is offered the function route");
         assertEquals(dev.langchain4j.model.chat.request.ToolChoice.REQUIRED, analysis.parameters().toolChoice(), "and must call one");
         assertTrue(((AiMessage) produced.get(2)).text().startsWith("Done: every change is made"), produced.get(2).toString());
+        assertTrue(model.answers.isEmpty());
+    }
+
+    @Test
+    void theAnalysisMayAskTwiceInOneTurnAfterReadingSomething() {
+        // This was "TurnFailedException: Resuming before ask made no progress on []": the second question looked like the first pause
+        agent.triage(true);
+        model.answers.add(call("ask_user", "{\"question\":\"Which file?\"}"));
+        model.answers.add(call("readFile", "{\"path\":\"note.txt\"}"));
+        model.answers.add(call("ask_user", "{\"question\":\"Which line?\"}"));
+        model.answers.add(route(GOAL + " in note.txt", "job_plan"));
+        answers(PLAN, EDIT);
+        approver.answersToQuestions.add(new net.rka.ai.agent.skills.SkillAnswer("note.txt", ""));
+        approver.answersToQuestions.add(new net.rka.ai.agent.skills.SkillAnswer("the first", ""));
+        approver.approveCalls = true;
+        approver.decisions.add(new PlanDecision(PlanDecision.Kind.APPROVE, ""));
+
+        List<ChatMessage> produced = run();
+
+        assertEquals(List.of("Which file?", "Which line?"), approver.questions.stream().map(net.rka.ai.agent.skills.SkillQuestion::question).toList());
+        assertTrue(produced.stream().anyMatch(m -> m instanceof AiMessage ai && ai.toolExecutionRequests().stream().anyMatch(c -> c.name().equals(CodingGraph.START_TOOL))),
+                produced.toString());
         assertTrue(model.answers.isEmpty());
     }
 

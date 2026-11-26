@@ -717,7 +717,11 @@ public final class Agent implements AutoCloseable {
                 // instead of asking forever. A revised plan adds job messages, a skill's next round or
                 // question adds skill messages or steps, so those count as progress.
                 Pause pause = new Pause(next, result.unansweredToolCalls(), result.skillUnansweredToolCalls(),
-                        codingProgress(result), result.allSkillMessages().size(), result.skillSteps());
+                        codingProgress(result), result.allSkillMessages().size(), result.skillSteps(),
+                        // A second question of the analysis in one turn (after it read something, say) changes none of the above: its
+                        // answer is a message of the conversation and a round of asking, which is progress (this was "made no progress on []")
+                        // (only for this pause: a denied call and its answer are messages too, and a model repeating a denied call must still stop)
+                        result.askRounds(), askPause ? result.messages().size() : 0);
                 if (pause.equals(previous)) {
                     throw new IllegalStateException("Resuming before " + next + " made no progress on "
                             + (skillPause ? pause.skillOpenCalls() : pause.openCalls()));
@@ -1097,7 +1101,7 @@ public final class Agent implements AutoCloseable {
      * same pause twice in a row means resuming changed nothing.
      */
     private record Pause(String node, List<ToolExecutionRequest> openCalls, List<ToolExecutionRequest> skillOpenCalls,
-                         String codingProgress, int skillMessages, int skillSteps) {
+                         String codingProgress, int skillMessages, int skillSteps, int askRounds, int messages) {
     }
 
     /**
