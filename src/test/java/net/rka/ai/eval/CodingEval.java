@@ -134,16 +134,16 @@ class CodingEval {
                         + contains(dir, "style.css", "font-size: 18px") + compiles(dir), true));
         // A whole new project from a generator (it needs the network and a few minutes for Maven): the recipe, no file picking, a test that compiles
         tasks.add(new Task("new-spring-boot-project", Map.of(),
-                "Create a new Spring Boot project called spring-boot-test in the folder spring-boot-test. Use Maven and Java, with Spring Web, "
+                "Create a new Spring Boot project called spring-boot-test in the folder spring-boot-test. Use Gradle and Java, with Spring Web, "
                         + "a GET /hello endpoint that returns the text Hello, and one JUnit test for that endpoint. Make sure it builds and the test passes.",
                 CodingEval::springBootProject));
         return tasks;
     }
 
-    /** The project exists, has the endpoint and a test of it, and {@code mvnw test} passes on it (run here, not taken from the report). */
+    /** The project exists, has the endpoint and a test of it, and {@code gradlew test} passes on it (run here, not taken from the report). */
     private static String springBootProject(Path dir) {
         Path project = dir.resolve("spring-boot-test");
-        if (!Files.isRegularFile(project.resolve("pom.xml"))) return "no spring-boot-test/pom.xml; ";
+        if (!Files.isRegularFile(project.resolve("build.gradle"))) return "no spring-boot-test/build.gradle; ";
         try (Stream<Path> walk = Files.walk(project.resolve("src"))) {
             List<Path> sources = walk.filter(p -> p.toString().endsWith(".java")).toList();
             String problems = "";
@@ -153,14 +153,14 @@ class CodingEval {
                 problems += "no test of /hello; ";
             if (!problems.isEmpty()) return problems;
             boolean windows = System.getProperty("os.name").toLowerCase().contains("win");
-            Process mvn = new ProcessBuilder(windows ? List.of("cmd.exe", "/c", "mvnw.cmd", "-q", "test") : List.of("./mvnw", "-q", "test"))
+            Process mvn = new ProcessBuilder(windows ? List.of("cmd.exe", "/c", ".\\gradlew.bat", "test") : List.of("./gradlew", "test"))
                     .directory(project.toFile()).redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD).start();
             mvn.getOutputStream().close();
             if (!mvn.waitFor(15, java.util.concurrent.TimeUnit.MINUTES)) {
                 mvn.destroyForcibly();
-                return "mvnw test did not finish in 15 minutes; ";
+                return "gradlew test did not finish in 15 minutes; ";
             }
-            return mvn.exitValue() == 0 ? "" : "mvnw test failed (exit " + mvn.exitValue() + "); ";
+            return mvn.exitValue() == 0 ? "" : "gradlew test failed (exit " + mvn.exitValue() + "); ";
         } catch (Exception e) {
             return "could not check the project: " + e.getMessage() + "; ";
         }

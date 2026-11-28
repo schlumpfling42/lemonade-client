@@ -534,7 +534,7 @@ the conversation and gives a job only the part that matches its goal (`Knowledge
 - **Recipes** are Markdown files with a header (`---\nkeywords: new spring boot project, spring initializr\n---`) and the know-how as text. The built-in ones are
   in `net/rka/ai/agent/recipes`, yours in `~\chat\recipes` (the same file name replaces a built-in). A recipe matches a goal that contains one of its keyword
   phrases (whole words, case and separators ignored); at most two go in. The built-in `spring-boot-new` says: generate the project with Spring Initializr
-  (one `curl.exe` and `Expand-Archive` setup command, the Maven wrapper brings Maven), keep `bootVersion=4.2.0`, and gives the controller and the Spring Boot 4
+  (one `curl.exe` and `Expand-Archive` setup command, the Gradle wrapper brings Gradle; Maven when the request says so), keep `bootVersion=4.2.0`, and gives the controller and the Spring Boot 4
   test (`@WebMvcTest` moved to `org.springframework.boot.webmvc.test.autoconfigure`) that were tried in a real build. Without it the model planned to download Maven from a mirror and wrote Spring Boot 3 imports.
 - **Lessons** are written by the client when something fails (a setup command that did not run), in `~\chat\lessons.json` (at most 100). A lesson comes back
   for a goal that shares at least two of its significant words, in front of the recipes, so the same mistake is not planned again.
@@ -548,13 +548,19 @@ variable `{{knowledge}}`. What else is left out of a job to keep it small:
   existing code is involved.
 - The plan runs at a low effort (`CODING_PLAN_EFFORT`, default `low`; the checks of it keep `CODING_DECIDING_EFFORT`), and so does the edit and the repair
   (`CODING_WRITE_EFFORT`, default `low`).
+- A plan that **makes its own project** (a setup command, or files in a folder that does not exist yet) has no default verify command until its setup has
+  run; then the build of the project that holds its files is used (`VerifyDefaults.detectNear`). Taking the trusted folder's files for the default
+  once compiled every Java file of a folder of projects with one `javac` line, too long for Windows. A request that fits in about six changes is planned
+  whole, with its test; only a bigger one is planned in increments.
 - A **failed setup command** does not end the job: the plan is made again with what failed (up to three plans). A build error in Maven's form
   `[ERROR] /path/File.java:[6,52] message` is tied to its file like javac's, so the repair can work on it.
 - On Windows a command runs from a temporary script (`powershell.exe -File`): `-Command` loses double quotes and `-EncodedCommand` is refused by
   endpoint protection as soon as the command downloads something.
 
-A new Spring Boot project with a `GET /hello` and a test went from 794 s and no project (8,200 tokens written) to 126 s and a project whose test passes
-(1,200 tokens written); `CodingEval` has the case (`new-spring-boot-project`).
+A new Spring Boot project with a `GET /hello` and a test went from 794 s and no project (8,200 tokens written) to 140 to 220 s and a project whose test
+passes: with Maven 126 s and 1,200 tokens written; with Gradle (the recipe's default now) five of six first runs worked, the sixth showed two more
+fixes (below), and the three runs after them took 218, 140 and 141 s. The result of every run was checked by running `gradlew test` on it, not taken from
+the job's report. `CodingEval` has the case (`new-spring-boot-project`).
 
 ## The model's traffic
 

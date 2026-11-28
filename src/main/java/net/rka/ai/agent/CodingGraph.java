@@ -905,8 +905,9 @@ public final class CodingGraph {
         // The size the plan may have: a long plan takes minutes to write and is refused above the hard limit, so the model is told
         // up front what to do with work that does not fit (it plans the most important part, and says what is left)
         prompt.append("\nA plan has at most ").append(PlanValidator.MAX_CHANGES).append(" changes (more than ").append(PlanValidator.HARD_MAX_CHANGES)
-                .append(" is refused) and must be written in few words. Plan incrementally: only the next part that is small, whole and leaves the project building, never"
-                        + " the whole goal at once (there is little room to write the code). Name what is left in \"summary\": it is planned after this part is made.");
+                .append(" is refused) and must be written in few words. A request that fits in a few changes (up to about six) is planned whole, with its test: never leave a part of"
+                        + " what was asked for later. A bigger one is planned in increments: only the next part that is small, whole and leaves the project building (there is little"
+                        + " room to write the code). Name what is left in \"summary\": it is planned after this part is made.");
         boolean revising = REVISE.equals(state.codingDecision()) && !state.codingPoints().isBlank();
         previous.ifPresent(plan -> prompt.append(revising ? "\n\nThe previous plan (this is what the user wants changed, not what to write again):\n"
                 : "\n\nThe previous plan:\n").append(plan.toJson()));
@@ -1694,6 +1695,16 @@ public final class CodingGraph {
         return ((ToolExecutionResultMessage) toolCalls.run(List.of(call), state.workFolder(), facts, timeoutSeconds).getFirst()).text();
     }
 
+    /**
+     * A plan with no verify commands (it makes its own project, so none were known when it was made) gets the build of the project that
+     * holds its files now that the setup has run ({@link VerifyDefaults#detectNear}).
+     */
+    private static CodingPlan withProjectBuild(State state, CodingPlan plan) {
+        if (!plan.verify().isEmpty()) return plan;
+        List<CodingPlan.Command> near = VerifyDefaults.normalize(state.workFolder(), VerifyDefaults.detectNear(state.workFolder(), plan.changedFiles()));
+        return near.isEmpty() ? plan : plan.with(plan.read(), plan.setup(), plan.changes(), near);
+    }
+
     /** What one run of the verify commands printed. */
     private record Run(List<String> outputs, int failed, String failedOutput, boolean missingTool, int missing) {
         /** Every failed command failed because its tool is not there: the code was not shown to be wrong. */
@@ -1738,7 +1749,7 @@ public final class CodingGraph {
     public Map<String, Object> verify(State state) {
         String unapproved = notApproved(state);
         if (unapproved != null) return Map.of(State.CODING_STOP_REASON, unapproved); // nothing runs, the job reports
-        CodingPlan plan = state.codingPlan().orElseThrow();
+        CodingPlan plan = withProjectBuild(state, state.codingPlan().orElseThrow());
         int attempt = state.codingAttempts() + 1;
         Run run;
         boolean undone = false;

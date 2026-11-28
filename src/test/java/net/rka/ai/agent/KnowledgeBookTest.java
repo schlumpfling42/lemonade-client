@@ -26,7 +26,7 @@ class KnowledgeBookTest {
         String text = book().forGoal("Create a new Spring Boot project called spring-boot-test in C:\\Data\\Projects with a GET /hello endpoint", 2_500);
 
         assertTrue(text.startsWith("### spring-boot-new"), text);
-        assertTrue(text.contains("start.spring.io") && text.contains("mvnw.cmd"), text);
+        assertTrue(text.contains("start.spring.io") && text.contains("gradlew.bat") && text.contains("type=gradle-project"), text);
         assertEquals("", book().forGoal("Fix the bug in Counter.increment", 2_500));
         assertEquals("", book().forGoal("", 2_500));
     }

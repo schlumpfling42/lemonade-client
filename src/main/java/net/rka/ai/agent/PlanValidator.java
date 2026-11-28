@@ -105,9 +105,23 @@ final class PlanValidator {
         }
         for (Command command : plan.setup()) checkCommand(command, folder, errors);
         for (Command command : plan.verify()) checkCommand(command, folder, errors);
-        List<Command> verify = plan.verify().isEmpty() ? VerifyDefaults.detect(folder) : plan.verify();
+        List<Command> verify = plan.verify().isEmpty() ? defaultVerify(folder, plan, changes) : plan.verify();
         return new Result(plan.with(List.of(), VerifyDefaults.normalize(folder, plan.setup()), changes,
                 VerifyDefaults.normalize(folder, verify)), errors, remarks);
+    }
+
+    /**
+     * The build commands of a plan that names none: those of the project that holds the changed files. A plan that makes its project itself (a
+     * setup command, or files in a folder that does not exist yet) has none yet: they are found when the job verifies, after the setup. Only a plan
+     * that changes files outside any project falls back to the trusted folder (a small plain Java folder is compiled). Taking the trusted folder
+     * first once compiled every Java file of a folder of projects with one {@code javac} line, which was too long for Windows.
+     */
+    private static List<Command> defaultVerify(Path folder, CodingPlan plan, List<Change> changes) {
+        List<String> files = changes.stream().map(Change::file).toList();
+        List<Command> near = VerifyDefaults.detectNear(folder, files);
+        if (!near.isEmpty()) return near;
+        boolean createsProject = !plan.setup().isEmpty() || CodingGraph.newProjectFolder(folder, plan.with(List.of(), List.of(), changes, List.of()));
+        return createsProject ? List.of() : VerifyDefaults.detect(folder);
     }
 
     /** A path as the plan spells it, compared without "./" and with forward slashes. */

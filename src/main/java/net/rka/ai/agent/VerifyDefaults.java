@@ -96,6 +96,15 @@ final class VerifyDefaults {
      * @param changed the changed files, relative to {@code folder}
      */
     static List<CodingPlan.Command> detectFor(Path folder, List<String> changed) {
+        List<CodingPlan.Command> near = detectNear(folder, changed);
+        return near.isEmpty() ? detect(folder) : near;
+    }
+
+    /**
+     * Like {@link #detectFor}, but only the projects that hold a changed file: no fallback to the trusted folder. A folder of several projects
+     * is not one project, and a job that creates its project has no build file yet (the plan's setup makes it): the build is known only then.
+     */
+    static List<CodingPlan.Command> detectNear(Path folder, List<String> changed) {
         java.util.Set<String> roots = new java.util.LinkedHashSet<>();
         for (String file : changed) {
             Path dir = folder.resolve(file).normalize().getParent();
@@ -107,7 +116,7 @@ final class VerifyDefaults {
                 dir = dir.equals(folder) ? null : dir.getParent();
             }
         }
-        if (roots.isEmpty()) return detect(folder);
+        if (roots.isEmpty()) return List.of();
         List<CodingPlan.Command> commands = new java.util.ArrayList<>();
         for (String root : roots.stream().limit(3).toList()) {
             Path dir = root.isEmpty() ? folder : folder.resolve(root);

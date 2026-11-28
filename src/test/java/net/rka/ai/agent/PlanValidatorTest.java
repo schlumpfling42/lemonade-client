@@ -216,4 +216,35 @@ class PlanValidatorTest {
         assertFalse(errors.contains("echo"), errors); // && inside quotes is text
         assertFalse(errors.contains("`javac A.java` chains"), errors);
     }
+
+    @Test
+    void aPlanThatMakesItsOwnProjectHasNoDefaultVerifyYetAndNeverTheTrustedFoldersJavac() throws Exception {
+        // A folder of other projects: taking the trusted folder's files for the default verify gave one javac line over all of them,
+        // too long for Windows, long before the setup had made the project
+        Files.deleteIfExists(folder.resolve("build.gradle"));
+        for (int i = 0; i < 30; i++) {
+            Files.createDirectories(folder.resolve("other/src"));
+            Files.writeString(folder.resolve("other/src/C" + i + ".java"), "class C" + i + " {}\n");
+        }
+        Change create = new Change("spring-boot-test/src/main/java/Hello.java", "", Action.CREATE, "the controller");
+        List<Command> setup = List.of(new Command("curl.exe -sSL https://start.spring.io/starter.zip -o x.zip", ""));
+
+        CodingPlan withSetup = PlanValidator.validate(plan(List.of(create), setup, List.of()), folder).plan();
+        assertEquals(List.of(), withSetup.verify(), "the build is found when the job verifies, after the setup");
+        CodingPlan newFolder = PlanValidator.validate(plan(List.of(create), List.of(), List.of()), folder).plan();
+        assertEquals(List.of(), newFolder.verify(), "files in a folder that does not exist yet");
+    }
+
+    @Test
+    void aPlanInAnExistingProjectGetsThatProjectsBuildAsTheDefaultVerify() throws Exception {
+        Files.createDirectories(folder.resolve("shop/src"));
+        Files.writeString(folder.resolve("shop/build.gradle"), "plugins {}\n");
+        Files.writeString(folder.resolve("shop/src/Shop.java"), "class Shop {\n    int y;\n}\n");
+
+        CodingPlan validated = PlanValidator.validate(plan(new Change("shop/src/Shop.java", "Shop.y", Action.DELETE, "why")), folder).plan();
+
+        assertEquals(1, validated.verify().size(), validated.verify().toString());
+        assertEquals("shop", validated.verify().getFirst().workingDirectory());
+        assertTrue(validated.verify().getFirst().command().contains("gradle"), validated.verify().toString());
+    }
 }
