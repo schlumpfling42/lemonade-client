@@ -430,6 +430,9 @@ Set these as environment variables or in a `.env` file in the project folder (en
 | `MODEL_TIMEOUT_MINUTES` | `15`                               | How long one model reply may take (a long file written on a local model needs minutes) |
 | `MODEL_CONTEXT_TOKENS` | `16384`                             | The model server's context size; each request is shortened to fit it |
 | `MODEL_STREAMING` | `true`                                   | Stream replies token by token (thinking, text, tool calls) to the window and CLI |
+| `MCP_ENABLED` | `false`                                  | `true` starts the MCP server in the chat window ([below](#controlling-the-app-over-mcp)) |
+| `MCP_PORT` | `9391`                                   | The port of the MCP server, on the loopback address only |
+| `MCP_TOKEN` | a random one, kept in `~\chat\mcp.json` | The bearer token clients must send |
 | `COMMAND_TIMEOUT_SECONDS` | `60`                             | Terminal/SSH commands are stopped after this |
 | `CODING_COMMAND_TIMEOUT_SECONDS` | `600`                      | Commands of a coding job are stopped after this |
 | `COMMAND_MAX_OUTPUT_CHARS` | `8000`                          | Longer command output keeps only the end |
@@ -542,6 +545,37 @@ the chat get; while answers are held, the text of the model reaches the chat onl
 can be looked at. The ticks are remembered. The gate sits directly in front of the model client, below the fitting of a request to the
 context window (`GatedChatModel`, `WireCodec`, `WireGate`, `WireView`), so what you see is what the server receives; the agent log and the
 traces record what was really sent. **Stop** in the chat cancels a held call.
+
+## Controlling the app over MCP
+
+With `MCP_ENABLED=true` the chat window starts an [MCP](https://modelcontextprotocol.io) server, so an assistant such as Claude Code can work the
+running application like the person at the keyboard: write to the model, see, hold, change and cancel every call to the model, and answer the
+questions the application asks. It talks the plain "streamable HTTP" form of MCP (one JSON-RPC message per POST) at `http://127.0.0.1:9391/mcp`.
+
+**Connecting.** The first start writes `~\chat\mcp.json` with the URL, a random token and the command to add the server to Claude Code:
+
+```powershell
+claude mcp add --transport http lemonade-client http://127.0.0.1:9391/mcp --header "Authorization: Bearer <token from ~\chat\mcp.json>"
+```
+
+**Safety.** The server can approve commands, so it is as powerful as you are. It listens on the loopback address only, answers only requests with
+the bearer token (compared in constant time), refuses requests that carry an `Origin` header (a web page in a browser) or a `Host` other than
+the loopback address (DNS rebinding), and is off unless you turn it on. Keep `mcp.json` to yourself: anyone who can read the token can run commands
+on this machine through the app. An answer from outside is checked like the dialog's (a command with `;`, `&`, `|`, `<`, `>`, `$`, backticks
+or brackets can be run once but not trusted).
+
+| Area | Tools |
+|------|-------|
+| The application | `app_status` (model, whether a turn runs, the open conversation, waiting questions, the held call, the hold boxes), `log_tail` (the readable log or the span file), `skills_list` |
+| Conversations | `conversations_list`, `conversation_get` (all messages with their tool calls and results, summary, facts), `conversation_new`, `conversation_open`, `conversation_rename`, `conversation_delete` |
+| A turn | `message_send` (types and sends as you would; the turn runs in the background), `turn_wait` (until the turn is over, a question waits or a call is held), `turn_stop` |
+| The calls to the model | `traffic_list`, `traffic_call` (settings, whole request, tools, whole answer), `holds_set` (hold every request / every answer), `traffic_held` (the call that waits, as editable text), `traffic_release` (go on, optionally with your edited text), `traffic_cancel` |
+| Questions for you | `approvals_pending` (a command or tool call, a plan, a skill's question, a drafted skill), `approval_answer` (`run`, `always`; `decision`, `comment`; `choice`; ...) |
+| Settings and memory | `settings_get`, `settings_set` (trusted folder and commands, global or of the conversation), `memory_get`, `context_reset` |
+
+The request and answer texts are the ones of the [traffic sidebar](#the-models-traffic) (`=== user ===`, `=== tool calls ===`, ...), and a text that does not
+parse is refused with the reason while the call stays held. A question can be answered in the window or over MCP, whichever comes first; an answer
+from MCP closes the dialog. The tools are `net.rka.ai.mcp.ControlTools`; the window's side is `ui.ChatControl`.
 
 ## Attaching files
 
@@ -940,4 +974,5 @@ Subprojects: `graph-annotations` (the annotations) and `graph-processor` (the co
 | `eval` | The evaluation framework (`EvalMain`, `EvalRunner`, `EvalCase`, `EvalChecks`, `EvalMetrics`, `EvalReport`, `AutoApprover`): see [Evaluations](#evaluations) |
 | `conversations` | `ConversationStore`: saves and loads chat-window conversations as JSON files |
 | `ui`       | `ChatWindow` (with the conversations sidebar), `ToolOutputPanel`, `ApprovalDialog` and `Launcher` (JavaFX), styles in `src/main/resources/chat.css` |
+| `mcp`      | The MCP server: `McpServer` (HTTP, token, JSON-RPC), `McpTool`, `ControlTools` (the tools), `AppControl` (what they control), `Asks` (the questions that wait), `McpConfig`; the window's side is `ui.ChatControl` and `ui.AskBridge` |
 | `cli`      | `Main`: command-line entry point (`./gradlew runCli`), `ConsoleApprover` (y/N prompt) |

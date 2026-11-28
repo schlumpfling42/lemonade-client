@@ -146,6 +146,9 @@ public class ChatWindow extends Application {
     /** The sidebar on the right with the traffic of the model; its width is added to the window when it opens. */
     private final VBox trafficPanel = new VBox();
     private WireView traffic;
+    /** The questions that wait for the person, which the MCP server can list and answer ({@link #asking}). */
+    private final net.rka.ai.mcp.Asks asks = new net.rka.ai.mcp.Asks();
+    private net.rka.ai.mcp.McpServer mcp;
     private static final double TRAFFIC_WIDTH = 520;
     private final javafx.scene.control.ToggleButton trafficToggle = new javafx.scene.control.ToggleButton("⇄ Model traffic");
 
@@ -375,6 +378,7 @@ public class ChatWindow extends Application {
         restorePlace();
         stage.show();
         restoreSession();
+        startMcp();
         watchPlace();
         input.requestFocus(); // ready to type
 
@@ -553,7 +557,7 @@ public class ChatWindow extends Application {
     }
 
     /** The Stop button: interrupts the turn's thread; the model's stream is cancelled, a running command is stopped. */
-    private void stopTurn() {
+    void stopTurn() {
         stopRequested = true;
         if (agent != null) agent.stop(); // the graph's own threads: a job must not go on in the background
         Thread running = turnThread;
@@ -753,7 +757,8 @@ public class ChatWindow extends Application {
             Map<String, Boolean> decisions = new HashMap<>();
             try {
                 for (ToolExecutionRequest call : calls) {
-                    ApprovalDialog.Answer answer = ApprovalDialog.ask(stage, call);
+                    ApprovalDialog.Answer answer = asking("tool_call", AskBridge.toolCall(call), args -> AskBridge.toolAnswer(call, args),
+                            () -> ApprovalDialog.ask(stage, call));
                     decisions.put(call.id(), answer.run());
                     trust(answer); // "Always ..." also remembers the command for next time
                 }
@@ -773,7 +778,7 @@ public class ChatWindow extends Application {
         CompletableFuture<PlanDecision> answer = new CompletableFuture<>();
         Platform.runLater(() -> {
             try {
-                answer.complete(PlanDialog.ask(stage, review, this::openFile));
+                answer.complete(asking("plan", AskBridge.plan(review), AskBridge::planAnswer, () -> PlanDialog.ask(stage, review, this::openFile)));
             } catch (RuntimeException e) {
                 answer.completeExceptionally(e);     // the agent treats a failing approver as "deny"
             }
@@ -790,7 +795,8 @@ public class ChatWindow extends Application {
         CompletableFuture<SkillAnswer> answer = new CompletableFuture<>();
         Platform.runLater(() -> {
             try {
-                answer.complete(SkillQuestionDialog.ask(stage, question));
+                answer.complete(asking("question", AskBridge.question(question), args -> AskBridge.questionAnswer(question, args),
+                        () -> SkillQuestionDialog.ask(stage, question)));
             } catch (RuntimeException e) {
                 answer.completeExceptionally(e);     // the agent treats a failing approver as "dismissed"
             }
@@ -807,7 +813,7 @@ public class ChatWindow extends Application {
         CompletableFuture<SkillDecision> answer = new CompletableFuture<>();
         Platform.runLater(() -> {
             try {
-                answer.complete(SkillReviewDialog.ask(stage, draft));
+                answer.complete(asking("skill_review", AskBridge.skillReview(draft), AskBridge::skillAnswer, () -> SkillReviewDialog.ask(stage, draft)));
             } catch (RuntimeException e) {
                 answer.completeExceptionally(e);     // the agent treats a failing approver as "cancel"
             }
@@ -1446,7 +1452,7 @@ public class ChatWindow extends Application {
     }
 
     /** Applies the open conversation's settings, and writes them to its file if it's saved already. */
-    private void setConversationSettings(Settings updated) {
+    void setConversationSettings(Settings updated) {
         conversationSettings = updated;
         showFolder();
         // Only conversations already in the list have a file; a new chat saves its settings with the first answer
@@ -1507,7 +1513,7 @@ public class ChatWindow extends Application {
         input.requestFocus();
     }
 
-    private void resetContext() {
+    void resetContext() {
         conversationSummary = ContextReset.summary(history, conversationFacts);
         if (saved.stream().anyMatch(s -> s.id().equals(threadId))) {
             try {
@@ -1679,8 +1685,148 @@ public class ChatWindow extends Application {
     }
 
     /** Called by JavaFX when the window closes. */
+    // ---- the MCP server: the person's assistant works the application through these (see ChatControl) ----
+
+    /** Starts the MCP server when {@code MCP_ENABLED=true}: loopback only, with a token kept in ~/chat/mcp.json. */
+    private void startMcp() {
+        try {
+            net.rka.ai.mcp.McpConfig config = net.rka.ai.mcp.McpConfig.load(Settings.globalFile().resolveSibling("mcp.json"),
+                    name -> net.rka.ai.config.Env.get(name, null));
+            if (!config.enabled()) return;
+            mcp = new net.rka.ai.mcp.McpServer(config.port(), config.token(), net.rka.ai.mcp.ControlTools.of(new ChatControl(this)),
+                    net.rka.ai.mcp.ControlTools.INSTRUCTIONS);
+            mcp.start();
+            config = config.withPort(mcp.port()); // 0 asked for a free port: the file says the real one
+            System.err.println("[mcp] " + config.url() + " (the token is in " + config.file() + ")");
+        } catch (Exception e) {
+            mcp = null;
+            showError("The MCP server did not start", e);
+        }
+    }
+
+    /**
+     * Shows a question's dialog and offers the same question to the MCP server: whoever answers first counts. An answer from there is
+     * checked first (a bad one is refused and the dialog stays), then the dialog is closed and its result replaced by the answer.
+     * Call it on the FX thread, like the dialogs.
+     */
+    private <T> T asking(String kind, com.fasterxml.jackson.databind.node.ObjectNode details,
+                         java.util.function.Function<com.fasterxml.jackson.databind.JsonNode, T> fromMcp, java.util.function.Supplier<T> dialog) {
+        java.util.concurrent.atomic.AtomicReference<T> remote = new java.util.concurrent.atomic.AtomicReference<>();
+        String id = asks.register(kind, details, arguments -> {
+            remote.set(fromMcp.apply(arguments));
+            Platform.runLater(this::closeDialogs);
+            return "Answered; the dialog is closed.";
+        });
+        try {
+            T shown = dialog.get();
+            return remote.get() != null ? remote.get() : shown;
+        } finally {
+            asks.done(id);
+        }
+    }
+
+    /** Closes the dialogs that are open over the main window. */
+    private void closeDialogs() {
+        for (javafx.stage.Window window : List.copyOf(javafx.stage.Window.getWindows())) {
+            if (window != stage && window.isShowing() && window.getScene() != null
+                    && window.getScene().getRoot() instanceof javafx.scene.control.DialogPane) {
+                window.hide();
+            }
+        }
+    }
+
+    net.rka.ai.mcp.Asks asks() {
+        return asks;
+    }
+
+    Agent agent() {
+        return agent;
+    }
+
+    ConversationStore store() {
+        return store;
+    }
+
+    WireView traffic() {
+        return traffic;
+    }
+
+    boolean isBusy() {
+        return busy.isVisible();
+    }
+
+    String openId() {
+        return threadId;
+    }
+
+    String openTitle() {
+        return conversationTitle;
+    }
+
+    List<ChatMessage> historyCopy() {
+        return List.copyOf(history);
+    }
+
+    Settings globalSettings() {
+        return globalSettings;
+    }
+
+    Settings conversationSettings() {
+        return conversationSettings;
+    }
+
+    ConversationSummary summary() {
+        return conversationSummary;
+    }
+
+    List<FactBook.Fact> facts() {
+        return conversationFacts;
+    }
+
+    /** Types the text and sends it, as the person would. */
+    void sendText(String text) {
+        input.setText(text);
+        sendMessage();
+    }
+
+    void startNewChat() {
+        resetConversation();
+    }
+
+    void openById(String id) {
+        Summary summary = store.list().stream().filter(s -> s.id().equals(id)).findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("No conversation with the id " + id + "."));
+        open(summary);
+        selectInList(id);
+    }
+
+    /** Renames without asking (the sidebar's menu asks first). */
+    void renameById(String id, String title) {
+        Conversation conversation = store.load(id);
+        store.save(conversation.withTitle(title));
+        if (id.equals(threadId)) {
+            conversationTitle = title;
+            traffic.showConversation(threadId, title);
+        }
+        refreshList();
+    }
+
+    /** Deletes without asking (the sidebar's menu asks first); deleting the open conversation starts a new chat. */
+    void deleteById(String id) {
+        store.delete(id);
+        traffic.forget(id);
+        if (id.equals(threadId)) resetConversation();
+        refreshList();
+    }
+
+    void changeGlobalSettings(Settings updated) {
+        Settings.saveGlobal(updated); // ~/chat/settings.json
+        globalSettings = updated;
+    }
+
     @Override
     public void stop() {
+        if (mcp != null) mcp.close();
         worker.shutdownNow(); // interrupt a running turn instead of waiting for it
         if (agent != null) {
             agent.close(); // flushes pending LangSmith spans

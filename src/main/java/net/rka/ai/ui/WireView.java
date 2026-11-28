@@ -97,6 +97,8 @@ final class WireView extends VBox {
     private final Label requestProblem = new Label();
     private final Label responseProblem = new Label();
     private final Button send = new Button("Send");
+    private final CheckBox holdRequestsBox = new CheckBox("hold every request");
+    private final CheckBox holdResponsesBox = new CheckBox("hold every answer");
     private final Button requestReset = new Button("Back to the original");
     private final Button requestCancel = new Button("Cancel the call");
     private final Button tools = new Button("Tools…");
@@ -163,7 +165,7 @@ final class WireView extends VBox {
         responseReset.setOnAction(e -> responseArea.setText(originalResponseText));
         responseCancel.setOnAction(e -> cancel(responseAnswer));
 
-        CheckBox holdRequests = new CheckBox("hold every request");
+        CheckBox holdRequests = holdRequestsBox;
         holdRequests.setSelected(ui.holdRequests);
         gate.holdRequests(ui.holdRequests);
         holdRequests.selectedProperty().addListener((o, was, now) -> {
@@ -171,7 +173,7 @@ final class WireView extends VBox {
             ui.holdRequests = now;
             saved.run();
         });
-        CheckBox holdResponses = new CheckBox("hold every answer");
+        CheckBox holdResponses = holdResponsesBox;
         holdResponses.setSelected(ui.holdResponses);
         gate.holdResponses(ui.holdResponses);
         holdResponses.selectedProperty().addListener((o, was, now) -> {
@@ -460,6 +462,68 @@ final class WireView extends VBox {
         setRequestControls(false);
         setResponseControls(false);
         answer.completeExceptionally(new CancellationException("the call was cancelled by the user"));
+    }
+
+    // ---- for the MCP server: what the person does with the buttons, done from outside (call all of these on the FX thread) ----
+
+    /** The call that waits for the person: {@code kind} "request" or "answer", its number and its text as it stands in the window. */
+    record Held(String kind, int n, String text) {
+    }
+
+    /** The held call, or null when none is held. */
+    Held held() {
+        int n = live == null ? 0 : live.n;
+        if (requestAnswer != null) return new Held("request", n, requestArea.getText());
+        if (responseAnswer != null) return new Held("answer", n, responseArea.getText());
+        return null;
+    }
+
+    /**
+     * Like the Send or the Use button, with {@code text} (when given) put into the window first. A text that does not parse is refused
+     * with the reason, as the window shows it, and the call stays held.
+     */
+    String release(String text) {
+        if (requestAnswer != null) {
+            if (text != null) requestArea.setText(text);
+            sendRequest();
+            if (requestAnswer != null) throw new IllegalArgumentException("The request was not sent, it does not parse: " + requestProblem.getText());
+            return "The request was sent.";
+        }
+        if (responseAnswer != null) {
+            if (text != null) responseArea.setText(text);
+            useResponse();
+            if (responseAnswer != null) throw new IllegalArgumentException("The answer was not used, it does not parse: " + responseProblem.getText());
+            return "The answer is used.";
+        }
+        throw new IllegalArgumentException("No call is held.");
+    }
+
+    /** Like the Cancel button of the held call. */
+    String cancelHeld() {
+        if (requestAnswer == null && responseAnswer == null) throw new IllegalArgumentException("No call is held.");
+        cancel(requestAnswer != null ? requestAnswer : responseAnswer);
+        return "The call was cancelled.";
+    }
+
+    boolean holdsRequests() {
+        return holdRequestsBox.isSelected();
+    }
+
+    boolean holdsAnswers() {
+        return holdResponsesBox.isSelected();
+    }
+
+    /** Ticks or unticks the hold boxes (null: leave as it is); the boxes do the rest, as when clicked. */
+    void setHolds(Boolean requests, Boolean answers) {
+        if (requests != null) holdRequestsBox.setSelected(requests);
+        if (answers != null) holdResponsesBox.setSelected(answers);
+    }
+
+    /** The calls of a conversation (the open one when {@code id} is empty), oldest first, as they are kept. */
+    List<WireLog.Entry> entries(String id) {
+        List<WireLog.Entry> entries = new ArrayList<>();
+        for (Call call : calls(id == null || id.isBlank() ? openId : id)) entries.add(call.entry());
+        return entries;
     }
 
     private void showTools() {
