@@ -180,7 +180,7 @@ public final class CodingKinds {
                         return true; // Agent asks the user (Approver.reviewPlan) and writes codingDecision
                     }
                 },
-                new Kind(SETUP, List.of("done"), false, setup,
+                new Kind(SETUP, List.of("done", "replan"), false, setup,
                         (job, state, prompt) -> job.setup(state), (state, limits) -> CodingGraph.afterSetup(state)),
                 new Kind(EDIT, List.of("edit", "verify"), true, setup,
                         CodingGraph::edit, (state, limits) -> CodingGraph.afterEdit(state)).withLimits(CodingGraph.Limits.EDIT_ATTEMPTS),

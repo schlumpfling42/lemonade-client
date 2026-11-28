@@ -95,7 +95,7 @@ import java.util.regex.PatternSyntaxException;
 public final class GenericKinds {
 
     /** Variables every skill has: the call's arguments as text, the trusted folder, the environment summary. */
-    public static final Set<String> BUILT_IN_VARIABLES = Set.of("goal", "folder", "environment");
+    public static final Set<String> BUILT_IN_VARIABLES = Set.of("goal", "folder", "environment", "knowledge");
     /** The variable holding the inputs: {@code {{input.<name>}}}. */
     public static final String INPUT = "input";
     /** The outcome of a {@code branch} when no case matches. */
@@ -180,6 +180,8 @@ public final class GenericKinds {
             vars.put("goal", goal(start, arguments));
             vars.put("folder", state.workFolder().toAbsolutePath().toString());
             if (needsEnvironment) vars.put("environment", environmentSummary());
+            // What the client knows about this kind of work (recipes, earlier failures); "" when nothing matches
+            vars.put("knowledge", net.rka.ai.agent.KnowledgeBook.shared().forGoal(String.valueOf(vars.get("goal")), 4_500));
 
             Map<String, Object> updates = new HashMap<>();
             updates.put(State.MESSAGES, refused);

@@ -34,6 +34,8 @@ final class BuildErrors {
     private static final String PATH = "(?:[A-Za-z]:)?[^\\s:()'\"<>|]+?\\.\\w{1,6}";
     private static final Pattern COLON = Pattern.compile("(?<path>" + PATH + "):(?<line>\\d+)(?::\\d+)?[: ]\\s*(?<message>.*)");
     private static final Pattern PAREN = Pattern.compile("(?<path>" + PATH + ")\\((?<line>\\d+)(?:,\\d+)?\\)\\s*:\\s*(?<message>.*)");
+    /** Maven: {@code [ERROR] /C:/work/App.java:[6,52] package x does not exist} (line and column in brackets after the colon). */
+    private static final Pattern BRACKET = Pattern.compile("(?<path>" + PATH + "):\\[(?<line>\\d+)(?:,\\d+)?]\\s*(?<message>.*)");
     private static final Pattern PYTHON = Pattern.compile("File \"(?<path>[^\"]+)\", line (?<line>\\d+)(?<message>.*)");
     private static final int MAX_POSITIONS = 40;
 
@@ -69,7 +71,7 @@ final class BuildErrors {
     }
 
     private static Matcher firstMatch(String line) {
-        for (Pattern pattern : List.of(PAREN, PYTHON, COLON)) {
+        for (Pattern pattern : List.of(PAREN, PYTHON, BRACKET, COLON)) {
             Matcher m = pattern.matcher(line);
             if (m.find()) return m;
         }

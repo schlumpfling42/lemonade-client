@@ -33,6 +33,50 @@ final class ProjectMap {
     private ProjectMap() {
     }
 
+    /** The files that mark a folder as a project of its own, and what they say it is. */
+    private static final Map<String, String> MARKERS = new TreeMap<>(Map.of("pom.xml", "maven", "build.gradle", "gradle", "build.gradle.kts", "gradle",
+            "package.json", "node", "Cargo.toml", "rust", "go.mod", "go", "pyproject.toml", "python", "requirements.txt", "python"));
+
+    /**
+     * The map of {@code folder} for a job with this goal. A folder that holds several projects (a "projects" folder) is shown as one line per
+     * project, with the files of the projects the goal names only: a job in it that creates a new project, or changes one, used to be given
+     * the files of all of them (400 files of one other project, 7,800 tokens, and the model took them for its own). Any other folder is
+     * mapped as {@link #of(Path)} does.
+     */
+    static String of(Path folder, String goal) {
+        List<Path> projects = new ArrayList<>();
+        try (java.util.stream.Stream<Path> children = Files.list(folder)) {
+            for (Path child : children.filter(Files::isDirectory).sorted().toList()) {
+                String name = child.getFileName().toString();
+                if (!name.startsWith(".") && !FileTools.SKIPPED_FOLDERS.contains(name) && stackOf(child) != null) projects.add(child);
+            }
+        } catch (IOException | RuntimeException e) {
+            return of(folder);
+        }
+        if (projects.size() < 2) return of(folder);
+        String wanted = " " + KnowledgeBook.normal(goal) + " ";
+        StringBuilder map = new StringBuilder("This folder holds several projects; the job is about the ones named in the goal or about a new one:\n");
+        for (Path project : projects) {
+            String name = project.getFileName().toString();
+            map.append("- ").append(name).append("/ (").append(stackOf(project)).append(" project)\n");
+        }
+        for (Path project : projects) {
+            String name = project.getFileName().toString();
+            if (!wanted.contains(" " + KnowledgeBook.normal(name) + " ")) continue;
+            map.append("\nFiles of ").append(name).append("/:\n");
+            for (String line : of(project).split("\n")) map.append(line.startsWith("(") ? line : name + "/" + line.replaceFirst("^\\./", "")).append('\n');
+        }
+        return map.toString().stripTrailing();
+    }
+
+    /** What kind of project a folder is, from its build file; null when it has none. */
+    private static String stackOf(Path folder) {
+        for (Map.Entry<String, String> marker : MARKERS.entrySet()) {
+            if (Files.isRegularFile(folder.resolve(marker.getKey()))) return marker.getValue();
+        }
+        return Files.isDirectory(folder.resolve(".git")) ? "git" : null;
+    }
+
     /** The map of {@code folder}, or a one-line note when it can't be read or is empty. */
     static String of(Path folder) {
         Map<String, List<String>> byFolder = new TreeMap<>();

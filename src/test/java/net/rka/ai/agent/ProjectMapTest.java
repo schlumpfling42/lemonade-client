@@ -7,6 +7,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** The folder's files as a job's starting point. */
@@ -69,5 +70,32 @@ class ProjectMapTest {
         String map = ProjectMap.of(folder);
         assertTrue(map.length() <= ProjectMap.MAX_CHARS + 100, "" + map.length());
         assertTrue(map.endsWith("… more files: list them with findFiles or listFiles"), map);
+    }
+
+    @Test
+    void aFolderOfSeveralProjectsListsThemAndShowsTheFilesOfTheOnesTheGoalNames() throws Exception {
+        write("shop/pom.xml", "<project/>");
+        write("shop/src/Main.java", "class Main {}\n");
+        write("blog/package.json", "{}");
+        write("blog/index.js", "x\n");
+        write("notes/readme.txt", "hi\n");
+
+        String forNew = ProjectMap.of(folder, "Create a new Spring Boot project called demo");
+        assertTrue(forNew.contains("- shop/ (maven project)") && forNew.contains("- blog/ (node project)"), forNew);
+        assertFalse(forNew.contains("Main.java") || forNew.contains("index.js"), "the files of other projects are not shown: " + forNew);
+        assertFalse(forNew.contains("notes/"), "a folder without a build file is not a project: " + forNew);
+
+        String forShop = ProjectMap.of(folder, "Add a method to the Main class of the shop project");
+        assertTrue(forShop.contains("Files of shop/:") && forShop.contains("shop/src/: Main.java 1"), forShop);
+        assertFalse(forShop.contains("index.js"), forShop);
+    }
+
+    @Test
+    void aFolderWithOneProjectOrNoneIsMappedAsBefore() throws Exception {
+        write("only/pom.xml", "<project/>");
+        write("only/src/A.java", "class A {}\n");
+        write("docs/x.md", "x\n");
+
+        assertEquals(ProjectMap.of(folder), ProjectMap.of(folder, "Create a new project"));
     }
 }

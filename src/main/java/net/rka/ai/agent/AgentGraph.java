@@ -77,7 +77,7 @@ import java.util.Set;
  *          + toolStep, ⏸ toolApproval (guarded tool calls), ⏸ before each askUser node, stopped
  *
  *   skill-coding (coding.json, steps in {@link CodingGraph}; the model never calls a tool in it): start -> environment
- *          -> pickFiles -> gather -> plan (&lt;-&gt; read more code) -> ⏸ planApproval -> setup -> edit (per file)
+ *          -> pickFiles -> gather -> plan (&lt;-&gt; read more code) -> ⏸ planApproval -> setup (a failed command: plan again) -> edit (per file)
  *          -> verify (&lt;-&gt; fix) -> report -> (no code changed: explain) -> answer
  *          (planApproval --(revise)--> revise --(change)--> plan, revise --(question)--> planApproval;
  *          fix --(revise)--> planApproval; every router's "stopped" -> report;

@@ -18,9 +18,9 @@ START -> memory -> analyze -> agent                            memory = summariz
                         --(skill_<name> call)---> skill-<name> -> agent   one subgraph per skill file, see Skills
                         --(no tool calls)-------> END                  (also after 12 tool rounds in one turn)
 
-skill-coding = start -> environment -> roadmap (is the goal big?) -> pickFiles -> gather -> plan 
+skill-coding = start -> environment -> roadmap (is the goal big?) -> pickFiles (none for a new project) -> gather -> plan 
          -> (pause: you approve the plan; a comment goes to revise: a question is answered, a change makes a new plan)
-         -> setup -> edit (per file) -> verify (-> fix) -> report
+         -> setup (a failed command: back to plan with what failed) -> edit (per file) -> verify (-> fix) -> report
          -> (no code changed: explain why and what to do) -> answer
          (needs the code understood: pickFiles -> study (read-only model) -> gather -> plan ...;
           open-ended work: pickFiles -> work (a model with tools) -> check (the build, no model) -> [repair -> recheck] -> finish, no plan
@@ -55,6 +55,9 @@ it (`git status` → `git status*`); commands with shell syntax can only be run 
 tools, the entry is `tool:<name>`. In the CLI, answer `g` to trust it globally.
 
 ## Coding jobs
+
+> A job that works well on a small local model gives it **little to read and little to write**: the client chooses what each step is told, a step
+> that needs knowledge the model lacks gets it from a recipe, and what failed once is not tried again. See [Know-how](#know-how-recipes-and-lessons).
 
 For coding work in the trusted folder (a feature such as a button or dialog in an app, a new
 project, a framework, a refactoring, design work across several files: anything that needs existing
@@ -259,7 +262,8 @@ a template):
 
 **Templates** (`prompt`, `question`, `result`, the texts in `branch` and `set`): `{{var}}`,
 `{{var.field}}` and `{{input.<name>}}`, plus the built-ins `{{goal}}` (the call's arguments as
-text), `{{folder}}` (the trusted folder) and `{{environment}}` (OS, shell and tool versions). Values
+text), `{{folder}}` (the trusted folder), `{{environment}}` (OS, shell and tool versions) and `{{knowledge}}` (what the client knows about this kind of
+work: matching recipes and earlier failures, see [Know-how](#know-how-recipes-and-lessons); empty when nothing matches). Values
 are inserted as text; there are no expressions. A variable must be an input, a built-in, or set by an
 earlier node's `output` or `set` on **every** path to the node that uses it.
 
@@ -425,6 +429,7 @@ Set these as environment variables or in a `.env` file in the project folder (en
 | `AGENT_LOG` | `summary`                                  | The readable agent log: `summary` (one line per model request, reply and tool call), `full` (also every message, reply and result), `off` |
 | `AGENT_LOG_DIR` | `TRACE_DIR` (`traces`)                     | Folder of the daily `agent-YYYY-MM-DD.log` |
 | `AGENT_LOG_CONSOLE` | `true`                                 | Also print the log lines to the console |
+| `CODING_PLAN_EFFORT` / `CODING_WRITE_EFFORT` | `low` / `low`                            | The reasoning effort of a coding job's plan, and of its edits and repairs (the checks use `CODING_DECIDING_EFFORT`, `medium`) |
 | `MODEL_REASONING_EFFORT` | `low`                            | How hard a reasoning model thinks (`low`, `medium`, `high`; empty sends nothing), sent as `chat_template_kwargs.reasoning_effort`; low keeps the thinking short |
 | `MODEL_MAX_OUTPUT_TOKENS` | `8192`                           | Longest reply the model may write; a runaway rewrite stops after a few minutes instead of running into the timeout |
 | `MODEL_TIMEOUT_MINUTES` | `15`                               | How long one model reply may take (a long file written on a local model needs minutes) |
@@ -520,6 +525,36 @@ so they are not written down). GAIA must be running; if it is not, the app says 
 
 In VS Code the launch entries **Chat (Lemonade)** and **Chat (GAIA)** (and **CLI (Lemonade)** / **CLI (GAIA)**) start the app on one server or the other; run one at a time, as both keep their window state and conversations in `~/chat`. For another server, copy `.env.gaia` to `.env.<name>`, set
 `LEMONADE_BASE_URL`, `LEMONADE_API_KEY` and `LEMONADE_MODEL` in it and start with `CHAT_PROFILE=<name>`.
+
+## Know-how (recipes and lessons)
+
+A small local model does not know the current way to do things, and every token it reads costs time, so the client keeps what it knows apart from
+the conversation and gives a job only the part that matches its goal (`KnowledgeBook`):
+
+- **Recipes** are Markdown files with a header (`---\nkeywords: new spring boot project, spring initializr\n---`) and the know-how as text. The built-in ones are
+  in `net/rka/ai/agent/recipes`, yours in `~\chat\recipes` (the same file name replaces a built-in). A recipe matches a goal that contains one of its keyword
+  phrases (whole words, case and separators ignored); at most two go in. The built-in `spring-boot-new` says: generate the project with Spring Initializr
+  (one `curl.exe` and `Expand-Archive` setup command, the Maven wrapper brings Maven), keep `bootVersion=4.2.0`, and gives the controller and the Spring Boot 4
+  test (`@WebMvcTest` moved to `org.springframework.boot.webmvc.test.autoconfigure`) that were tried in a real build. Without it the model planned to download Maven from a mirror and wrote Spring Boot 3 imports.
+- **Lessons** are written by the client when something fails (a setup command that did not run), in `~\chat\lessons.json` (at most 100). A lesson comes back
+  for a goal that shares at least two of its significant words, in front of the recipes, so the same mistake is not planned again.
+
+Where it goes: the plan, the revision, the edit and the repair get it as the part `KNOWLEDGE` of their opening (at most 4,500 characters), and the free route as the
+variable `{{knowledge}}`. What else is left out of a job to keep it small:
+
+- A goal that asks for a **new project** picks no files (nothing to read, no model call), and a trusted folder that holds **several projects** is mapped as
+  one line per project, with the files of the projects the goal names only. (A new project in `C:\Data\Projects` used to get 400 files of another project.)
+- The plan's rules about sections, patches and anchors (3,700 of 5,800 characters, between `[[existing]]` and `[[/existing]]` in the plan prompt) are sent only when
+  existing code is involved.
+- The plan runs at a low effort (`CODING_PLAN_EFFORT`, default `low`; the checks of it keep `CODING_DECIDING_EFFORT`), and so does the edit and the repair
+  (`CODING_WRITE_EFFORT`, default `low`).
+- A **failed setup command** does not end the job: the plan is made again with what failed (up to three plans). A build error in Maven's form
+  `[ERROR] /path/File.java:[6,52] message` is tied to its file like javac's, so the repair can work on it.
+- On Windows a command runs from a temporary script (`powershell.exe -File`): `-Command` loses double quotes and `-EncodedCommand` is refused by
+  endpoint protection as soon as the command downloads something.
+
+A new Spring Boot project with a `GET /hello` and a test went from 794 s and no project (8,200 tokens written) to 126 s and a project whose test passes
+(1,200 tokens written); `CodingEval` has the case (`new-spring-boot-project`).
 
 ## The model's traffic
 

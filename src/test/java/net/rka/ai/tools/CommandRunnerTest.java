@@ -8,6 +8,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class CommandRunnerTest {
@@ -23,6 +24,54 @@ class CommandRunnerTest {
                 : "echo \"Not implemented yet\" | grep -c \"Not implemented yet\"";
         String result = CommandRunner.run(CommandRunner.shell(command), dir, Duration.ofSeconds(60), chunk -> { });
         assertTrue(result.startsWith("exit code: 0") && result.contains("1"), result);
+    }
+
+    private String exitCodeOf(String command) throws Exception {
+        String result = CommandRunner.run(CommandRunner.shell(command), dir, Duration.ofSeconds(60), chunk -> { });
+        return result.lines().findFirst().orElse("");
+    }
+
+    @Test
+    void theExitCodeIsTheOneOfTheLastStatementWhateverTheShell() throws Exception {
+        String fail3 = CommandRunner.isWindows() ? "cmd /c exit 3" : "exit 3";
+        assertEquals("exit code: 3", exitCodeOf(fail3));
+        assertEquals("exit code: 0", exitCodeOf("echo ok"));
+        // a failure in the middle that the next statement got over is not the command's failure
+        assertEquals("exit code: 0", exitCodeOf(fail3 + "; echo after"));
+        if (CommandRunner.isWindows()) {
+            assertEquals("exit code: 1", exitCodeOf("Get-Item C:\\does\\not\\exist"));
+            assertEquals("exit code: 5", exitCodeOf("exit 5"));
+        }
+    }
+
+    @Test
+    void aWindowsCommandIsRunFromAScriptThatIsDeletedWhenItIsDone() throws Exception {
+        org.junit.jupiter.api.Assumptions.assumeTrue(CommandRunner.isWindows());
+        Path tmp = Path.of(System.getProperty("java.io.tmpdir"));
+        long before = scripts(tmp);
+
+        List<String> commandLine = CommandRunner.shell("Write-Output 'a \"quoted\" word'");
+        assertEquals(before + 1, scripts(tmp), "the command is written to a script file");
+        assertTrue(commandLine.contains("-File") && !commandLine.contains("-EncodedCommand"), commandLine.toString());
+        String result = CommandRunner.run(commandLine, dir, Duration.ofSeconds(60), chunk -> { });
+
+        assertTrue(result.contains("a \"quoted\" word"), result);
+        assertEquals(before, scripts(tmp), "the script is deleted after the run");
+    }
+
+    private static long scripts(Path tmp) throws Exception {
+        try (var files = java.nio.file.Files.list(tmp)) {
+            return files.filter(f -> f.getFileName().toString().startsWith(CommandRunner.SCRIPT_PREFIX)).count();
+        }
+    }
+
+    @Test
+    void aDownloadCommandIsNotBlockedAndKeepsItsQuotes() throws Exception {
+        org.junit.jupiter.api.Assumptions.assumeTrue(CommandRunner.isWindows());
+        // The same text as -EncodedCommand was refused with "Access is denied" on a machine with endpoint protection
+        String result = CommandRunner.run(CommandRunner.shell("curl.exe --version; Write-Output \"a b\""), dir, Duration.ofSeconds(60), chunk -> { });
+
+        assertTrue(result.startsWith("exit code: 0") && result.contains("a b"), result);
     }
 
     @Test

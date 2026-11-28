@@ -68,7 +68,9 @@ import java.util.stream.Stream;
  *                                          |
  *                                    planApproval (the user: approve / revise / deny)
  *                                          |
- *                                    setup -> edit (per change) -> verify --(fail)--> fix -> verify
+ *                                    setup --(a command failed: plan again, with what failed)--> plan
+ *                                      |
+ *                                    edit (per change) -> verify --(fail)--> fix -> verify
  *                                                                     | passed         \-(outside the plan)-> planApproval
  *                                                               designReview --(issues)--> fix
  *                                                                     |
@@ -142,6 +144,10 @@ public final class CodingGraph {
     private static final int MAX_PICKS = 6;
     /** The reasoning effort of the steps that decide (where the change belongs, what it is, whether it does what was asked); the rest run low. */
     private static final String DECIDING_EFFORT = net.rka.ai.config.Env.get("CODING_DECIDING_EFFORT", "medium");
+    /** The plan thinks less than the checks of it: with the know-how in front of it a plan at medium effort spent 2,000 tokens (2.5 minutes) thinking, twice. */
+    /** The edit and the repair write code the plan and the know-how already shaped: a medium effort made a repair think for 2,400 tokens (three minutes) three times. */
+    private static final String WRITE_EFFORT = net.rka.ai.config.Env.get("CODING_WRITE_EFFORT", "low");
+    private static final String PLAN_EFFORT = net.rka.ai.config.Env.get("CODING_PLAN_EFFORT", "low");
     private static final String SUCCESS = "success";
     private static final String FAILED = "failed";
     private static final String UNCHANGED = "unchanged";
@@ -278,7 +284,7 @@ public final class CodingGraph {
         updates.put(State.CODING_CALL_ID, start.id());
         updates.put(State.CODING_PLAN_FILE, planFileFor(goal));
         updates.put(State.CODING_ENVIRONMENT, environmentSummary()); // probes only when the cache is stale
-        updates.put(State.CODING_PROJECT_MAP, ProjectMap.of(state.workFolder()));
+        updates.put(State.CODING_PROJECT_MAP, ProjectMap.of(state.workFolder(), goal));
         // Reset what an earlier job of this turn may have left; "" and 0 mean "not set"
         for (String key : List.of(State.CODING_PICKS, State.CODING_APPROACH, State.CODING_CODE, State.CODING_READ, State.CODING_PLAN,
                 State.CODING_DECISION, State.CODING_COMMENT, State.CODING_REVISION_REASON, State.CODING_VERIFY_OUTPUT,
@@ -317,6 +323,9 @@ public final class CodingGraph {
     public Map<String, Object> pickFiles(State state, String instructions) {
         // The analysis already said how the job goes; "free" needs no files to start from, so no model call
         if ("free".equals(state.codingRoute())) return Map.of(State.CODING_PICKS, "", State.CODING_APPROACH, "free");
+        // A new project has no existing file to start from: asking the model to pick from the trusted folder (which holds other
+        // projects) put 7,800 tokens of unrelated code into the plan and cost a model call
+        if (looksLikeNewProject(state.codingGoal())) return Map.of(State.CODING_PICKS, "", State.CODING_APPROACH, "");
         if (state.codingProjectMap().startsWith("(")) return Map.of(State.CODING_PICKS, "", State.CODING_APPROACH, state.codingRoute().equals("study") ? "study" : "");
         String problem = "";
         for (int attempt = 1; attempt <= 2; attempt++) {
@@ -340,6 +349,18 @@ public final class CodingGraph {
         }
         return Map.of(State.CODING_STOP_REASON, "could not tell which files the work belongs in (" + problem
                 + "): name the file in your request.");
+    }
+
+    private static final java.util.regex.Pattern NEW_PROJECT = java.util.regex.Pattern.compile(
+            "(?i)\\b(create|make|generate|scaffold|bootstrap|initiali[sz]e|set ?up|start)\\b[^.\\n]{0,60}\\b(new|fresh)\\b[^.\\n]{0,40}"
+                    + "\\b(project|app|application|service|module|starter)\\b|\\b(new|fresh)\\b[^.\\n]{0,30}\\b(project|application|starter)\\b");
+
+    /**
+     * Whether the goal asks for a new project (a "new Spring Boot project", "create a new app"): then there is no existing file to pick
+     * and nothing to study. A goal that names an existing project ("add to the existing project") is not one.
+     */
+    static boolean looksLikeNewProject(String goal) {
+        return goal != null && NEW_PROJECT.matcher(goal).find() && !goal.toLowerCase(java.util.Locale.ROOT).contains("existing");
     }
 
     /** Work to plan → gather the outlines; open-ended work → free; a model error or no usable answer → report. */
@@ -533,6 +554,8 @@ public final class CodingGraph {
      * ({@code maxPlanAttempts} answers in all); a valid one is saved as Markdown for review.
      */
     public Map<String, Object> plan(State state, String instructions) {
+        // A plan for new files only has no use for the rules about sections, patches and anchors (3,700 of 5,800 characters)
+        instructions = planInstructions(instructions, !state.codingPicks().isEmpty() || state.codingApprovedPlan().isPresent());
         files(state).flush(); // the plan is checked against the files: a repair that changed Java files in memory is written first
         state = withFreshOutlines(state);
         Optional<CodingPlan> previous = state.codingPlan();
@@ -543,7 +566,7 @@ public final class CodingGraph {
             boolean cutOff = false;
             try {
                 // The step that decides what changes. A plan is a list: a reply that fills the limit is code or thinking that does not belong in it
-                ChatResponse response = askResponse(JobPhase.PLAN, state, instructions, planPrompt(state, previous, problem), DECIDING_EFFORT, PLAN_MAX_TOKENS,
+                ChatResponse response = askResponse(JobPhase.PLAN, state, instructions, planPrompt(state, previous, problem), PLAN_EFFORT, PLAN_MAX_TOKENS,
                         PlanFunction.spec());
                 reply = response.aiMessage();
                 cutOff = response.tokenUsage() != null && response.tokenUsage().outputTokenCount() != null
@@ -614,6 +637,15 @@ public final class CodingGraph {
                 + (problem.isBlank() ? "the answer was not a plan" : problem));
     }
 
+    /**
+     * The plan's instructions for this job: the parts between {@code [[existing]]} and {@code [[/existing]]} (how to name a section, patch
+     * or replace one, ask to read more code) stay only when existing code is involved; the markers never reach the model.
+     */
+    static String planInstructions(String instructions, boolean existingCode) {
+        if (existingCode) return instructions.replace("[[existing]]", "").replace("[[/existing]]", "");
+        return instructions.replaceAll("(?s)\\[\\[existing]].*?\\[\\[/existing]]", "").replaceAll("\\n{2,}", "\n");
+    }
+
     // ---- planCheck ----
 
     /** The most tokens a plan may take to write (a good plan is a few hundred; at about 11 tokens a second 3,500 are over five minutes). */
@@ -676,10 +708,11 @@ public final class CodingGraph {
         List<String> problems = new ArrayList<>();
         Path root = state.workFolder();
         String text = plan.summary() + " " + plan.approach();
+        if (newProjectFolder(root, plan)) return problems; // every file is new and in one new folder: the project is a whole, nothing in it is dead
         for (Change change : plan.changes()) {
             if (change.action() != Action.CREATE || !change.file().endsWith(".java")) continue;
             String name = Path.of(change.file()).getFileName().toString().replaceFirst("\\.java$", "");
-            if (name.matches(".*(Test|Tests|IT|Main|App)$") || name.equals("package-info") || name.equals("module-info")
+            if (name.matches(".*(Test|Tests|IT|Main|App|Application)$") || name.equals("package-info") || name.equals("module-info")
                     || change.file().replace('\\', '/').contains("src/test/")) continue;
             java.util.regex.Pattern word = java.util.regex.Pattern.compile("\\b" + java.util.regex.Pattern.quote(name) + "\\b");
             boolean named = word.matcher(text).find();
@@ -694,6 +727,18 @@ public final class CodingGraph {
             }
         }
         return problems;
+    }
+
+    /** Whether the plan only creates files, all in one folder that does not exist yet: a new project. */
+    static boolean newProjectFolder(Path root, CodingPlan plan) {
+        if (plan.changes().isEmpty()) return false;
+        Set<String> tops = new java.util.HashSet<>();
+        for (Change change : plan.changes()) {
+            String file = change.file().replace('\\', '/');
+            if (change.action() != Action.CREATE || !file.contains("/")) return false;
+            tops.add(file.substring(0, file.indexOf('/')));
+        }
+        return tops.size() == 1 && !Files.exists(root.resolve(tops.iterator().next()));
     }
 
     /** Whether some Java file of the folder other than {@code except} contains the word (a folder it cannot read counts as yes). */
@@ -986,16 +1031,28 @@ public final class CodingGraph {
                 return Map.of(State.CODING_STOP_REASON, reason(TOOL_ERROR, e));
             }
             if (!ranWithExitCodeZero(result)) {
-                return Map.of(State.CODING_STOP_REASON, "the setup command " + CodingPlan.describe(command)
-                        + " failed: " + oneLine(result, 400));
+                String failed = "the setup command " + CodingPlan.describe(command) + " failed: " + oneLine(result, 400);
+                KnowledgeBook.shared().learn(state.codingGoal(), "A setup command failed: " + CodingPlan.describe(command) + " -> " + oneLine(result, 200)
+                        + ". Plan another way to get the same result.");
+                // The job used to stop here with nothing done. The plan is made again, with what failed, up to three plans in all
+                if (state.codingPlanRounds() < MAX_PLAN_ROUNDS_AFTER_SETUP) {
+                    return Map.of(State.CODING_REVISION_REASON, SETUP_FAILED + failed + ". Plan again without relying on it: another way to get the same result, or leave that setup out.");
+                }
+                return Map.of(State.CODING_STOP_REASON, failed);
             }
         }
         return Map.of(State.CODING_SETUP_DONE, 1);
     }
 
-    /** Setup is done (or there was none) → the changes; a failed command → report. */
+    /** The start of the revision reason that says the plan's setup failed (the router sends the job back to the plan). */
+    static final String SETUP_FAILED = "The setup of your plan failed: ";
+    /** After this many plans a failed setup ends the job. */
+    static final int MAX_PLAN_ROUNDS_AFTER_SETUP = 3;
+
+    /** Setup is done (or there was none) → the changes; a failed command → a new plan, or the report when it has failed too often. */
     public static String afterSetup(State state) {
-        return stopped(state) ? STOPPED : "done";
+        if (stopped(state)) return STOPPED;
+        return state.codingSetupDone() == 0 && state.codingRevisionReason().startsWith(SETUP_FAILED) ? "replan" : "done";
     }
 
     // ---- edit ----
@@ -1143,7 +1200,7 @@ public final class CodingGraph {
             for (int attempt = 1; attempt <= limits.editAttempts() && blocks.isEmpty(); attempt++) {
                 AiMessage reply;
                 try {
-                    reply = askResponse(JobPhase.EDIT, state, instructions, togetherPrompt(state, plan, ledger, group, problem), null, null, EditFunction.spec()).aiMessage();
+                    reply = askResponse(JobPhase.EDIT, state, instructions, togetherPrompt(state, plan, ledger, group, problem), WRITE_EFFORT, null, EditFunction.spec()).aiMessage();
                 } catch (RuntimeException e) {
                     return new Edited(ledger, reason(MODEL_ERROR, e));
                 }
@@ -1197,7 +1254,7 @@ public final class CodingGraph {
             if (change.action() != Action.DELETE) {
                 AiMessage reply;
                 try {
-                    reply = askResponse(JobPhase.EDIT, state, instructions, editPrompt(state, plan, ledger, index, problem), null, null, EditFunction.spec()).aiMessage();
+                    reply = askResponse(JobPhase.EDIT, state, instructions, editPrompt(state, plan, ledger, index, problem), WRITE_EFFORT, null, EditFunction.spec()).aiMessage();
                 } catch (RuntimeException e) {
                     return new Edited(ledger, reason(MODEL_ERROR, e));
                 }
@@ -1907,7 +1964,7 @@ public final class CodingGraph {
             Change change = new Change(finding.file(), finding.section(), Action.REPLACE, "fix: " + oneLine(finding.text(), 300));
             AiMessage reply;
             try {
-                reply = askResponse(JobPhase.FIX, state, instructions, fixPrompt(state, finding, change), null, null, EditFunction.spec()).aiMessage();
+                reply = askResponse(JobPhase.FIX, state, instructions, fixPrompt(state, finding, change), WRITE_EFFORT, null, EditFunction.spec()).aiMessage();
             } catch (RuntimeException e) {
                 return Map.of(State.CODING_STOP_REASON, reason(MODEL_ERROR, e), State.CODING_FIXES, "");
             }
@@ -1927,7 +1984,7 @@ public final class CodingGraph {
                     AiMessage again = askResponse(JobPhase.FIX, state, instructions, fixPrompt(state, finding, change) + extra
                             + "\n\nYour answer was the same code as the section has now, which fixes nothing. Change the code so the"
                             + " message is gone, or call write_code with no texts if the cause is not in this section.",
-                            null, null, EditFunction.spec()).aiMessage();
+                            WRITE_EFFORT, null, EditFunction.spec()).aiMessage();
                     Optional<String> second = EditFunction.texts(again).stream().findFirst();
                     if (second.isEmpty() || second.get().strip().equalsIgnoreCase(SKIP)) {
                         notes.add(finding.file() + " · " + finding.section() + ": left as it is");
@@ -2695,6 +2752,10 @@ public final class CodingGraph {
         parts.put(JobPhase.Part.GOAL, "Goal: " + state.codingGoal());
         parts.put(JobPhase.Part.FOLDER, "\nTrusted folder (every path is relative to it): " + state.workFolder().toAbsolutePath());
         parts.put(JobPhase.Part.ENVIRONMENT, "\n\nEnvironment:\n" + state.codingEnvironment());
+        String knowledge = KnowledgeBook.shared().forGoal(state.codingGoal(), MAX_KNOWLEDGE_CHARS);
+        if (!knowledge.isBlank()) {
+            parts.put(JobPhase.Part.KNOWLEDGE, "\n\nKnow-how for this kind of work (from the client: more reliable than what you remember, follow it):\n" + knowledge);
+        }
         if (!state.codingProjectMap().isBlank()) {
             parts.put(JobPhase.Part.MAP, "\n\nFiles in the trusted folder (folder: file lines, ...; build output and dependencies left out):\n"
                     + state.codingProjectMap());
@@ -2722,6 +2783,8 @@ public final class CodingGraph {
     }
 
     private static final int MAX_NOTES_CHARS = 6_000;
+    /** The most characters of know-how a job is given ({@link KnowledgeBook}). */
+    static final int MAX_KNOWLEDGE_CHARS = 4_500;
 
     /** The languages whose design guide applies to this job (named in the goal, or the picked and planned files). */
     private Set<String> guideLanguages(State state) {

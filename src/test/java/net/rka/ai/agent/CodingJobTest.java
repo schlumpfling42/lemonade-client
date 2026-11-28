@@ -652,7 +652,7 @@ class CodingJobTest {
         assertEquals("use the Kotlin DSL", revised.userComment()); // read before the plan approval step clears it
         assertTrue(revised.toMarkdown().startsWith("Revised plan: you asked: use the Kotlin DSL"), revised.toMarkdown());
         ChatRequest replan = model.requests.get(3); // agent, plan, the reading of the comment, then the revision
-        assertTrue(replan.messages().getLast() instanceof UserMessage u && u.singleText().startsWith(codingPrompt("plan")));
+        assertTrue(replan.messages().getLast() instanceof UserMessage u && u.singleText().startsWith("You are planning a coding job."));
         assertTrue(text(replan).contains("use the Kotlin DSL"), text(replan));
         assertEquals(3, produced.size(), produced.toString());
         assertTrue(((ToolExecutionResultMessage) produced.get(1)).text().startsWith("Done"));

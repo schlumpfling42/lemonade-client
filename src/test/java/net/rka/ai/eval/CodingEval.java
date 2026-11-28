@@ -132,7 +132,46 @@ class CodingEval {
                         + "change the version in build.gradle to 1.1; and make the title in style.css 18px.",
                 dir -> contains(dir, "Greeter.java", "\"Hi, \"") + notContains(dir, "Counter.java", "count--") + contains(dir, "build.gradle", "version = '1.1'")
                         + contains(dir, "style.css", "font-size: 18px") + compiles(dir), true));
+        // A whole new project from a generator (it needs the network and a few minutes for Maven): the recipe, no file picking, a test that compiles
+        tasks.add(new Task("new-spring-boot-project", Map.of(),
+                "Create a new Spring Boot project called spring-boot-test in the folder spring-boot-test. Use Maven and Java, with Spring Web, "
+                        + "a GET /hello endpoint that returns the text Hello, and one JUnit test for that endpoint. Make sure it builds and the test passes.",
+                CodingEval::springBootProject));
         return tasks;
+    }
+
+    /** The project exists, has the endpoint and a test of it, and {@code mvnw test} passes on it (run here, not taken from the report). */
+    private static String springBootProject(Path dir) {
+        Path project = dir.resolve("spring-boot-test");
+        if (!Files.isRegularFile(project.resolve("pom.xml"))) return "no spring-boot-test/pom.xml; ";
+        try (Stream<Path> walk = Files.walk(project.resolve("src"))) {
+            List<Path> sources = walk.filter(p -> p.toString().endsWith(".java")).toList();
+            String problems = "";
+            if (sources.stream().noneMatch(p -> p.toString().replace('\\', '/').contains("/src/main/") && readQuietly(p).contains("\"/hello\"")))
+                problems += "no controller with /hello; ";
+            if (sources.stream().noneMatch(p -> p.toString().replace('\\', '/').contains("/src/test/") && readQuietly(p).contains("/hello")))
+                problems += "no test of /hello; ";
+            if (!problems.isEmpty()) return problems;
+            boolean windows = System.getProperty("os.name").toLowerCase().contains("win");
+            Process mvn = new ProcessBuilder(windows ? List.of("cmd.exe", "/c", "mvnw.cmd", "-q", "test") : List.of("./mvnw", "-q", "test"))
+                    .directory(project.toFile()).redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD).start();
+            mvn.getOutputStream().close();
+            if (!mvn.waitFor(15, java.util.concurrent.TimeUnit.MINUTES)) {
+                mvn.destroyForcibly();
+                return "mvnw test did not finish in 15 minutes; ";
+            }
+            return mvn.exitValue() == 0 ? "" : "mvnw test failed (exit " + mvn.exitValue() + "); ";
+        } catch (Exception e) {
+            return "could not check the project: " + e.getMessage() + "; ";
+        }
+    }
+
+    private static String readQuietly(Path file) {
+        try {
+            return Files.readString(file);
+        } catch (Exception e) {
+            return "";
+        }
     }
 
     @Test

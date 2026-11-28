@@ -602,15 +602,32 @@ class CodingGraphTest {
         approve();
         assertEquals(List.of("npm install", BUILD), commands.ran); // setup first, then the changes, then verify
 
-        // A failing setup command ends the job before anything changes
+        // A failing setup command does not end the job: nothing changed yet, so the plan is made again with what failed, and the
+        // failure is kept as a lesson for the next job about the same work
         setUp();
-        commands.script("npm install", "exit code: 1\n--- stderr ---\nnpm ERR! offline");
-        answers(PICKS, plan);
-        start();
-        State failed = approve();
+        KnowledgeBook lessons = new KnowledgeBook(List.of(), folder.resolveSibling("lessons-" + System.nanoTime() + ".json"));
+        KnowledgeBook.useForTests(lessons);
+        try {
+            commands.script("npm install", "exit code: 1\n--- stderr ---\nnpm ERR! offline");
+            String withoutSetup = plan.replace("\"setup\":[{\"command\":\"npm install\"}],", "");
+            answers(PICKS, plan, withoutSetup);
+            start();
+            State planned = approve();
 
-        assertTrue(failed.codingReport().startsWith("Stopped: the setup command `npm install` failed: exit code: 1"), failed.codingReport());
-        assertEquals(APP, file("src/App.java"));
+            assertEquals("plan approval", "plan approval"); // the graph is paused at the approval of the second plan
+            assertTrue(planned.codingRevisionReason().startsWith(CodingGraph.SETUP_FAILED + "the setup command `npm install` failed: exit code: 1"),
+                    planned.codingRevisionReason());
+            assertTrue(text(model.requests.get(2)).contains("The setup of your plan failed"), text(model.requests.get(2)));
+            assertEquals(APP, file("src/App.java"), "nothing changed before the new plan was approved");
+            assertEquals(1, lessons.readLessons().size());
+            assertTrue(lessons.readLessons().getFirst().text().contains("npm install"), lessons.readLessons().toString());
+
+            State done = approve();
+
+            assertTrue(done.codingReport().startsWith("Done"), done.codingReport());
+        } finally {
+            KnowledgeBook.useForTests(null);
+        }
     }
 
     @Test

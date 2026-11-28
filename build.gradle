@@ -88,6 +88,8 @@ dependencies {
 
 tasks.named('test') {
     useJUnitPlatform()
+    // Tests must not write lessons into the person's ~/chat/lessons.json (KnowledgeBook.shared())
+    systemProperty 'lemonade.lessons', layout.buildDirectory.file('test-lessons.json').get().asFile.path
 }
 
 application {

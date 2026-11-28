@@ -60,16 +60,37 @@ final class CommandRunner {
     /** The command line wrapped in the platform's shell. */
     static List<String> shell(String command) {
         // The whole command is ONE argument to the shell, so pipes, quotes etc. are interpreted by the shell.
-        // On Windows it goes as -EncodedCommand (Base64 of UTF-16LE): Java escapes a double quote in an argument as \"
-        // and powershell.exe -Command does not undo that, so Select-String -Pattern "a b" arrived as the two words a and b.
-        return isWindows()
-                ? List.of("powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded(command))
-                : List.of("/bin/bash", "-c", command);
+        return isWindows() ? windowsShell(command) : List.of("/bin/bash", "-c", command);
     }
 
-    /** The command as PowerShell's {@code -EncodedCommand} wants it. */
-    static String encoded(String command) {
-        return java.util.Base64.getEncoder().encodeToString(command.getBytes(java.nio.charset.StandardCharsets.UTF_16LE));
+    /** What every script of a command ends with: the exit code of the command's last statement ({@code -File} always exits 0 otherwise). */
+    static final String EXIT_CODE_OF_THE_LAST_STATEMENT =
+            "if (-not $?) { if ($LASTEXITCODE -is [int] -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE } else { exit 1 } }";
+    /** The scripts of commands: they are deleted when the command is done ({@link #run}). */
+    static final String SCRIPT_PREFIX = "lc-cmd-";
+
+    /**
+     * On Windows the command is run from a temporary script file ({@code powershell.exe -File}). The two simpler ways both failed here:
+     * {@code -Command} loses the double quotes (Java does not escape them the way PowerShell reads them: Select-String -Pattern "a b"
+     * arrived as two words), and {@code -EncodedCommand} is blocked by this kind of machine's endpoint protection as soon as the command
+     * downloads something ("Cannot run program powershell.exe: Access is denied", for curl.exe ... -o x.zip). A file keeps the text exactly
+     * as the model wrote it. UTF-8 with a byte order mark, which Windows PowerShell 5.1 needs to read non-ASCII text.
+     */
+    static List<String> windowsShell(String command) {
+        try {
+            Path script = Files.createTempFile(SCRIPT_PREFIX, ".ps1");
+            Files.writeString(script, "﻿" + command + "\n" + EXIT_CODE_OF_THE_LAST_STATEMENT + "\n", java.nio.charset.StandardCharsets.UTF_8);
+            return List.of("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script.toString());
+        } catch (IOException e) {
+            throw new java.io.UncheckedIOException("Could not write the script of the command", e);
+        }
+    }
+
+    /** Deletes the script of a command line made by {@link #windowsShell} (nothing for any other command line). */
+    private static void discardScript(List<String> commandLine) {
+        if (commandLine.size() < 2 || !"-File".equals(commandLine.get(commandLine.size() - 2))) return;
+        Path script = Path.of(commandLine.getLast());
+        if (script.getFileName().toString().startsWith(SCRIPT_PREFIX)) discard(script);
     }
 
     /**
@@ -141,6 +162,7 @@ final class CommandRunner {
         } finally {
             discard(stdout);
             discard(stderr);
+            discardScript(commandLine);
         }
     }
 

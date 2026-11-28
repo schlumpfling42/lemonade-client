@@ -39,6 +39,22 @@ class BuildErrorsTest {
     }
 
     @Test
+    void findsMavenPositionsWithTheLineAndColumnInBrackets() {
+        // Maven (with -q) prints the absolute path with a leading slash on Windows, then [line,column]; without this the failure named no file,
+        // nothing could be repaired and a job that had made every change rolled them all back after one attempt
+        String output = "[ERROR] COMPILATION ERROR :\n"
+                + "[ERROR] /" + folder.resolve("src").resolve("App.java").toString().replace('\\', '/') + ":[6,52] package org.springframework.boot.test.autoconfigure.web.servlet does not exist\n"
+                + "[ERROR] /" + folder.resolve("src").resolve("App.java").toString().replace('\\', '/') + ":[9,2] cannot find symbol\n"
+                + "[INFO] 2 errors\n";
+
+        List<Position> positions = BuildErrors.parse(output, folder);
+
+        assertEquals(2, positions.size(), positions.toString());
+        assertEquals(new Position("src/App.java", 6, "package org.springframework.boot.test.autoconfigure.web.servlet does not exist"), positions.get(0));
+        assertEquals(9, positions.get(1).line());
+    }
+
+    @Test
     void findsRelativeTypeScriptAndPythonPositions() {
         String output = "src/app.ts(12,5): error TS2304: Cannot find name 'y'.\n"
                 + "Traceback (most recent call last):\n"
